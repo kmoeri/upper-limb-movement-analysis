@@ -5,6 +5,7 @@ from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
 from scipy.signal import savgol_filter
+from scipy.spatial.transform import Rotation
 
 
 def extract_pose_of_focus(motion_df: pd.DataFrame, curr_affected_side: str, trial_id: int) -> tuple:
@@ -240,4 +241,125 @@ def preprocess_motion_data(df: pd.DataFrame, framerate: float) -> tuple:
         processed_df[col_name] = sg_filt_arr
 
     return processed_df, max_nan_gap_overall,
+
+
+def get_wrist_coordinate_system(motion_df: pd.DataFrame, landmark_lst: list[str]) -> tuple:
+    """
+    Calculates the coordinate system of the wrist by spanning a triangular surface:
+    wrist -> index finger mcp -> little finger mcp <- wrist.
+    The x-axis is aligned from the wrist distal to the center between index mcp and little finger mcp.
+    The z-axis vector is represented by the normal of the back of the hand.
+    The y-axis results from the cross product of the other two vectors and is directed medially.
+
+    Args:
+        motion_df (pd.DataFrame): Motion data.
+        landmark_lst (list[str]): List of landmark names.
+
+    Returns:
+        x_vec_norm (np.ndarray): x-axis vector of wrist.
+        y_vec_norm (np.ndarray): y-axis vector of wrist.
+        z_vec_norm (np.ndarray): z-axis vector of wrist.
+        wrist_coord (np.ndarray): mediapipe coordinate of wrist.
+        norm_x (np.ndarray): L2 distance from wrist to midpoint of mcp.
+
+    """
+
+    hand_of_focus: str = landmark_lst[0][-1]
+
+    coord_suffix = ['x', 'y', 'z']
+    landmark_name_lst: list = [f'{landmark}_{axis}' for landmark in landmark_lst for axis in coord_suffix]
+
+    # landmark coordinates
+    wrist_coord: np.ndarray = motion_df[[landmark_name_lst[0], landmark_name_lst[1], landmark_name_lst[2]]].values
+    index_base_coord: np.ndarray = motion_df[[landmark_name_lst[3], landmark_name_lst[4], landmark_name_lst[5]]].values
+    pinky_base_coord: np.ndarray = motion_df[[landmark_name_lst[6], landmark_name_lst[7], landmark_name_lst[8]]].values
+
+    # get the center between index and pinky to align the x vector with the axis of the hand
+    index_pinky_center_coord_out: np.ndarray = index_base_coord + 0.5 * (pinky_base_coord - index_base_coord)
+    index_pinky_center_coord_in: np.ndarray = pinky_base_coord - 0.5 * (pinky_base_coord - index_base_coord)
+
+    # local hand vectors with origin at wrist
+    y_vec: np.ndarray = 0.5 * (index_pinky_center_coord_out + index_pinky_center_coord_in) - wrist_coord
+    z_vec: np.ndarray = np.cross((index_base_coord - wrist_coord), (pinky_base_coord - wrist_coord))
+
+    if hand_of_focus == '1':
+        # Left Hand
+        z_vec = z_vec * (-1)
+        x_vec: np.ndarray = np.cross(y_vec, z_vec)
+    else:
+        # Right hand
+        x_vec: np.ndarray = np.cross(y_vec, z_vec)
+
+    # L2 norm / vector magnitude
+    norm_x: np.ndarray = np.linalg.norm(x_vec, axis=1)
+    norm_y: np.ndarray = np.linalg.norm(y_vec, axis=1)
+    norm_z: np.ndarray = np.linalg.norm(z_vec, axis=1)
+
+    # normalize by broadcasting (catch divisions by zero --> returns a vector of zeros)
+    x_vec_norm: np.ndarray = np.divide(x_vec, norm_x[:, np.newaxis], out=np.zeros_like(x_vec), where=norm_x[:, np.newaxis] != 0)
+    y_vec_norm: np.ndarray = np.divide(y_vec, norm_y[:, np.newaxis], out=np.zeros_like(y_vec), where=norm_y[:, np.newaxis] != 0)
+    z_vec_norm: np.ndarray = np.divide(z_vec, norm_z[:, np.newaxis], out=np.zeros_like(z_vec), where=norm_z[:, np.newaxis] != 0)
+
+    return x_vec_norm, y_vec_norm, z_vec_norm, wrist_coord, norm_y
+
+
+def calculate_3d_hand_rotation(motion_df: pd.DataFrame, landmark_lst: list) -> np.ndarray:
+    """
+    Calculates Euler angles by accumulating relative angles between frames. Ensures shortest-path
+    rotation to prevent signal rectification.
+
+    Args:
+        motion_df (pd.DataFrame): Motion data.
+        landmark_lst (list[str]): List of landmark names.
+
+    Returns:
+        euler_df (pd.DataFrame): Euler angles.
+    """
+    # 1. Get basis vectors (Y-distal, X-medial, Z-palm)
+    x_n, y_n, z_n, _, _ = get_wrist_coordinate_system(motion_df, landmark_lst)
+    frame_num = motion_df.shape[0]
+
+    # convert to rotation object
+    mats = np.stack((x_n, y_n, z_n), axis=-1)
+    rot_objs = Rotation.from_matrix(mats)
+
+    # initialize arrays
+    euler_accumulated = np.zeros((frame_num, 3))
+
+    # initialize mask to track max velocity violations
+    glitch_mask = np.zeros(frame_num, dtype=bool)
+
+    # 2. Iterate and accumulate
+    for i in range(1, frame_num):
+        # calculate delta rotation between current and previous frame
+        # R_delta = R_prev^-1 * R_curr
+        delta_rot_obj = rot_objs[i - 1].inv() * rot_objs[i]
+        delta_euler = delta_rot_obj.as_euler('xyz', degrees=True)
+
+        # shortest path correction - wrap delta to [-180, 180]
+        delta_euler = (delta_euler + 180) % 360 - 180
+
+        # check for glitch - rotations exceeding 35 degrees per frame
+        if np.any(np.abs(delta_euler) > 38):
+            glitch_mask[i] = True
+            delta_euler = np.zeros(3)
+
+        # ignore tiny rotations (jitter)
+        # if np.all(np.abs(delta_euler) < 0.2):
+        #     delta_euler = np.zeros(3)
+
+        # Add to total angle
+        euler_accumulated[i] = euler_accumulated[i - 1] + delta_euler
+
+    # 3. Apply the interpolation
+    euler_df = pd.DataFrame(euler_accumulated, columns=['x', 'y', 'z'])
+
+    # set identified glitches to NaN (for interpolate() function)
+    euler_df.loc[glitch_mask] = np.nan
+
+    # interpolate
+    euler_df = euler_df.interpolate(method='pchip', limit_direction='both')
+
+    # extract the angle for pronation-supination
+    return euler_df['y'].values
 
