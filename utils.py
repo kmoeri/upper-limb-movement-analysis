@@ -107,3 +107,34 @@ def save_pose_to_csv(video_name: str, res_dir: str, marker_dict: dict, body_part
 
     # Save the DataFrame to a CSV file
     marker_df.to_csv(os.path.join(res_dir, video_name))
+
+
+def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
+    """
+    Infers the focus side ('Left' or 'Right') by checking column names
+    against known starting landmarks.
+
+    Args:
+        df (pd.DataFrame): DataFrame (either hand_df or pose_df).
+        model_type (str): 'Hand' or 'Pose' to check the correct set of labels.
+
+    Returns:
+        str | None: 'Left', 'Right', or None if side cannot be determined.
+    """
+
+    # check hand model labels ('wrist1_x' or 'wrist2_x')
+    if model_type.capitalize() == 'Hand':
+        if 'wrist1_x' in df.columns:
+            return 'Left'
+        elif 'wrist2_x' in df.columns:
+            return 'Right'
+
+    # check pose model labels ('wrist_left_x' or 'wrist_right_x')
+    elif model_type.capitalize() == 'Pose':
+        if 'wrist_left_x' in df.columns:
+            return 'Left'
+        elif 'wrist_right_x' in df.columns:
+            return 'Right'
+
+    return None
+
