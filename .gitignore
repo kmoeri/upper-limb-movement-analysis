@@ -84,6 +84,9 @@ ipython_config.py
 # pyenv
 .python-version
 
+# idea
+.idea
+
 # celery beat schedule file
 celerybeat-schedule
 
