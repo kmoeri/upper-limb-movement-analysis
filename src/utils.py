@@ -3,6 +3,29 @@ import os
 import numpy as np
 import pandas as pd
 
+# look-up-table to map file names with exercise names
+EXERCISE_LUT = {
+    # WT-01 & WT-02 pair -> Index Finger Tapping on Thenar
+    "WT-01": "Ex_FingerTapping",
+    "WT-02": "Ex_FingerTapping",
+
+    # WT-03 & WT-04 pair -> Finger Alternation Tapping
+    "WT-03": "Ex_FingerAlternation",
+    "WT-04": "Ex_FingerAlternation",
+
+    # WT-05 & WT-06 pair -> Hand Opening and Closing
+    "WT-05": "Ex_HandOpening",
+    "WT-06": "Ex_HandOpening",
+
+    # WT-07 & WT-08 pair -> Hand Pronation/Supination
+    "WT-07": "Ex_ProSup",
+    "WT-08": "Ex_ProSup",
+
+    # WT-09 & WT-10 pair -> Finger Tapping on Table
+    "WT-09": "Ex_TableTapping",
+    "WT-10": "Ex_TableTapping",
+}
+
 
 def import_video_files(video_path: str) -> list[str]:
     """
@@ -25,6 +48,50 @@ def import_video_files(video_path: str) -> list[str]:
         raise ValueError(f'No video files found in {video_path}')
 
     return sorted(video_files)
+
+
+def parse_filename(video_fpath: str, affected_sides_lst: list) -> tuple[str, str, str, str, str]:
+    """
+    Parses the base video file name into exercise information elements:
+    - participant ID
+    - visit ID
+    - exercise ID
+    - side condition (Healthy or Affected)
+    - exercise side (R or L)
+
+    Args:
+        video_fpath (str): video file path.
+        affected_sides_lst (list): List of lists. Each list contains the participant ID and affected side ('R' or 'L').
+
+    Returns:
+        tuple: tuple containing exercise information.
+    """
+    # Filename: Project_PID_CamType_VisitID_ExerciseID_CamID
+    filename: str = os.path.basename(video_fpath)
+    f_splits: list = filename.split('_')
+    p_id: str = f_splits[1]
+    visit_id: str = f_splits[3]
+    ex_id: str = f_splits[4]
+
+    # get the exercise name from the mapping
+    ex_name: str = EXERCISE_LUT.get(ex_id, 'Unknown')
+
+    # check whether the current side is 'Healthy' or 'Affected'
+    ex_num: int = int(ex_id.split('-')[1])
+    side_condition: str = 'Healthy' if ex_num % 2 == 0 else 'Affected'
+
+    # check which side ('R' or 'L') corresponds to the current 'side_condition'
+    affected_side: list = [x for x in affected_sides_lst if x[0] == p_id][0]
+
+    if len(affected_side) == 0:
+        raise ValueError(f'Participant {p_id} was not found.')
+
+    if side_condition == 'Affected':
+        ex_side: str = affected_side[1]
+    else:
+        ex_side: str = 'L' if affected_side == 'R' else 'R'
+
+    return p_id, visit_id, ex_name, side_condition, ex_side
 
 
 def save_hands_to_csv(video_name: str, res_dir: str, marker_dict: dict, body_part_name_lst: list,
