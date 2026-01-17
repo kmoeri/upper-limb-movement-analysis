@@ -1,29 +1,42 @@
 # Libraries
+
+# standard
 import os
 import numpy as np
 import pandas as pd
 
+# preprocessing
+from hampel import hampel
+from filterpy.kalman import KalmanFilter
+from filterpy.common import Q_discrete_white_noise
+from scipy.signal import savgol_filter
+from scipy.spatial.transform import Rotation
+
+# modules
+from src.config import config
+
+
 # look-up-table to map file names with exercise names
 EXERCISE_LUT = {
     # WT-01 & WT-02 pair -> Index Finger Tapping on Thenar
-    "WT-01": "Ex_FingerTapping",
-    "WT-02": "Ex_FingerTapping",
+    'WT-01': 'FingerTapping',
+    'WT-02': 'FingerTapping',
 
     # WT-03 & WT-04 pair -> Finger Alternation Tapping
-    "WT-03": "Ex_FingerAlternation",
-    "WT-04": "Ex_FingerAlternation",
+    'WT-03': 'FingerAlternation',
+    'WT-04': 'FingerAlternation',
 
     # WT-05 & WT-06 pair -> Hand Opening and Closing
-    "WT-05": "Ex_HandOpening",
-    "WT-06": "Ex_HandOpening",
+    'WT-05': 'HandOpening',
+    'WT-06': 'HandOpening',
 
     # WT-07 & WT-08 pair -> Hand Pronation/Supination
-    "WT-07": "Ex_ProSup",
-    "WT-08": "Ex_ProSup",
+    'WT-07': 'ProSup',
+    'WT-08': 'ProSup',
 
     # WT-09 & WT-10 pair -> Finger Tapping on Table
-    "WT-09": "Ex_TableTapping",
-    "WT-10": "Ex_TableTapping",
+    'WT-09': 'TableTapping',
+    'WT-10': 'TableTapping',
 }
 
 
@@ -92,6 +105,261 @@ def parse_filename(video_fpath: str, affected_sides_lst: list) -> tuple[str, str
         ex_side: str = 'L' if affected_side == 'R' else 'R'
 
     return p_id, visit_id, ex_name, side_condition, ex_side
+
+
+class ToolBox:
+    def __init__(self, video_width: int = config['camera_param']['width'],
+                 video_height: int = config['camera_param']['height'],
+                 fps: float = config['camera_param']['fps']):
+        """
+        Constructor to initialize class variables.
+
+        Args:
+            video_width (int, optional): Video image width. Defaults to 2064.
+            video_height (int, optional): Video image height. Defaults to 1544.
+            fps (float, optional): Video framerate. Defaults to 90.0.
+        """
+        self.video_width: int = video_width
+        self.video_height: int = video_height
+        self.fps: float = fps
+
+    @staticmethod
+    def load_landmarks_to_dict(csv_file: str) -> dict:
+        """"
+        Loads landmark data stored in a csv file into a dictionary.
+        Each dict element has a label (e.g., wrist) as key and a list of ndarray for each axis (x,y,z) as value.
+
+        Args:
+            csv_file (str): Absolute path of the csv file.
+
+        Returns:
+            dict: Dictionary of landmarks and their corresponding 3D coordinates.
+        """
+
+        # read csv data in a pandas DataFrame
+        landmarks_df: pd.DataFrame = pd.read_csv(csv_file)
+        landmarks_dict: dict = dict()
+
+        # get a list of the base label names (without axis appendix)
+        base_names: list[str] = [label[:-2] for label in landmarks_df.columns if label.endswith('_x')]
+
+        for label in base_names:
+
+            try:
+                # get single axis arrays
+                x_landmark_data: np.ndarray = landmarks_df[f'{label}_x'].values
+                y_landmark_data: np.ndarray = landmarks_df[f'{label}_y'].values
+                z_landmark_data: np.ndarray = landmarks_df[f'{label}_z'].values
+
+                # store all axes in dict using the corresponding label
+                landmarks_dict[label] = [x_landmark_data, y_landmark_data, z_landmark_data]
+
+            except KeyError as e:
+                print(f'Warning: Missing coordinate column for {label}: {e}')
+                continue
+
+        return landmarks_dict
+
+    def normalize_to_aspect_ratio(self, raw_landmarks: dict) -> dict:
+        """
+        Converts normalized MediaPipe landmark coordinates to pixel space coordinates (3D coordinates).
+        Corrects via the aspect ratio of the camera image.
+        Do not apply this conversion to MediaPipe's world coordinate landmarks, as it is not needed.
+
+        Args:
+            raw_landmarks (dict): Dictionary of MediaPipe (normalized) landmarks (3D coordinates).
+
+        Returns:
+            pixel_landmarks (dict): Dictionary of aspect ratio corrected pixel space landmarks (3D coordinates).
+        """
+
+        pixel_landmarks: dict = dict()
+
+        for label in raw_landmarks.keys():
+
+            # get list with all three axes
+            landmark_lst: list = raw_landmarks[label]
+
+            # handle landmarks that do not have exactly 3 coordinates (x, y, z)
+            if len(landmark_lst) != 3:
+                print(f'Warning: Expected 3 coordinate arrays. '
+                      f'Landmark {label} has {len(landmark_lst)} landmark coordinates.')
+                continue
+
+            # do not process labels without data
+            if len(landmark_lst[0]) == 0:
+                print(f'Warning: Landmark {label} has no landmark coordinates.')
+                continue
+
+            # correct the data in each axes
+            x_pixel: np.ndarray = landmark_lst[0] * self.video_width
+            y_pixel: np.ndarray = landmark_lst[1] * self.video_height
+            z_pixel: np.ndarray = landmark_lst[2] * self.video_width
+
+            # store pixel landmarks
+            pixel_landmarks[label] = [x_pixel, y_pixel, z_pixel]
+
+        return pixel_landmarks
+
+    def filter_landmarks(self, landmarks_dict: dict) -> dict:
+        """
+            Preprocess ndarray time series of landmark data in three distinct stages:
+            - Hampel: detects outliers (large jumps) and replaces them with a local median.
+            - Kalman: smooths signal, predicts values for missing data, and provides better estimates.
+            - Savitzky-Golay: clean-up residual noise/jitter
+
+            Args:
+                landmarks_dict (dict): Dictionary of normalized landmarks (3D coordinates).
+
+            Returns:
+                data_processed_df (pd.DataFrame): Processed motion data.
+                max_nan_gap_overall (int): the maximum number of consecutive nans in the entire DataFrame.
+            """
+
+        # configurations
+        MAX_GAP_THRESHOLD: int = config['preprocessing']['max_gap_threshold']
+        DT: float = 1/self.fps
+
+        def _max_repeated_nan(arr: np.ndarray) -> int:
+            """
+            Calculates the maximum gap (number of consecutive) NaN values in an array.
+
+            Args:
+                arr (np.ndarray): 1D array.
+
+            Returns:
+                gap (int): maximum count of consecutive nans.
+            """
+            mask = np.concatenate(([False], np.isnan(arr), [False]))
+            if ~mask.any():
+                return 0
+            else:
+                idx = np.nonzero(mask[1:] != mask[:-1])[0]
+                gap: int = (idx[1::2] - idx[::2]).max()
+                return gap
+
+        def _const_acc_kalman_filter(data_arr: np.ndarray, dt: float,
+                                     Q_scale: float = 100.0, R_scale: float = 0.0001) -> np.ndarray:
+            """
+            Applies a Constant Acceleration Kalman Filter using FilterPy with NaN handling.
+
+            Args:
+                data_arr: 1D array of position measurements (position_x or position_y).
+                dt: Time step (1 / FRAMERATE).
+                Q_scale: Scaling factor for Process Noise (Q). High Q = more responsiveness.
+                R_scale: Scaling factor for Measurement Noise (R). Low R = trust the measurement.
+
+            Returns:
+                np.ndarray: The filtered position estimates.
+            """
+
+            # find the index and value of the first valid measurement for initialization
+            valid_indices = np.where(~np.isnan(data_arr))[0]
+            if not valid_indices.size:
+                return np.full_like(data_arr, np.nan)
+
+            # state initialization
+            dim_x = 3   # pos, vel, acc
+            dim_z = 1   # only position is measured
+
+            # set the starting position at first valid value
+            start_idx = valid_indices[0]
+            initial_pos = data_arr[start_idx]
+
+            # initialize the Kalman Filter object
+            kf: KalmanFilter = KalmanFilter(dim_x=dim_x, dim_z=dim_z)
+
+            # initial state (x): start with position, zero velocity, zero acceleration
+            kf.x = np.array([[initial_pos], [0.], [0.]])
+
+            # initial covariance (P): small initial confidence
+            kf.P = np.eye(dim_x) * 1000.0
+
+            # measurement function (H): only measure position
+            kf.H = np.array([[1., 0., 0.]]) # classic H matrix
+
+            # measurement noise (R): low R_scale tuning for trusting the measurement
+            kf.R = np.array([[R_scale]])
+
+            # transition matrix (F): constant acceleration model
+            kf.F = np.array([[1., dt, 0.5 * dt ** 2],
+                             [0., 1., dt],
+                             [0., 0., 1.]])
+
+            # process noise (Q): high Q_scale tuning for responsiveness
+            # Q_discrete_white_noise generates a numerically stable Q matrix for kinematic models
+            kf.Q = Q_discrete_white_noise(dim=dim_x, dt=dt, var=Q_scale, block_size=1)
+
+            # Filtering loop
+            # array to store the filtered position estimates
+            filtered_pos_estimates = np.zeros(len(data_arr))
+
+            for i in range(len(data_arr)):
+                z_k = data_arr[i]
+
+                # 1) predict step (always runs)
+                kf.predict()
+
+                # 2) update step (only runs when measurement is valid)
+                if not np.isnan(z_k):
+                    # measurement is a 1x1 array for the measured position
+                    kf.update(np.array([[z_k]]))
+
+                # store the current filtered position estimate
+                filtered_pos_estimates[i] = kf.x[0, 0]
+
+            return filtered_pos_estimates
+
+        # initialize max gap count variable
+        filtered_landmarks: dict = {}
+
+        # iterate over items (key, value)
+        for landmark_name, landmark_axes in landmarks_dict.items():
+
+            landmark_data_lst: list = []      # reset list
+            is_gap_exceeded: bool = False     # gap safety flag
+
+            # check for gaps
+            for landmark_axis in landmark_axes:
+                if _max_repeated_nan(landmark_axis) > MAX_GAP_THRESHOLD:
+                    is_gap_exceeded = True
+
+            # handle axes with gaps
+            if is_gap_exceeded:
+                print(f'Landmark {landmark_name} was flagged as invalid due to missing data > {MAX_GAP_THRESHOLD}.')
+                nan_arr: np.ndarray = np.full_like(landmark_axes[0], np.nan)
+                filtered_landmarks[landmark_name] = [nan_arr, nan_arr, nan_arr]
+                continue
+
+            # preprocessing loop
+            for data_arr in landmark_axes:
+
+                # interpolate gaps for Hampel filter
+                data_series: pd.Series = pd.Series(data_arr)
+                interp_data: np.ndarray = data_series.interpolate(method='linear', limit_direction='both').to_numpy()
+
+                # Hampel filtering
+                try:
+                    hampel_filt_arr: hampel.hampel = hampel(interp_data, config['preprocessing']['hampel_window_size'],
+                                                            config['preprocessing']['hampel_n_sigma']).filtered_data
+                except Exception:
+                    hampel_filt_arr: np.ndarray = interp_data
+
+                # Kalman filtering
+                kalman_filt_arr: np.ndarray = _const_acc_kalman_filter(hampel_filt_arr, DT,
+                                                                       config['preprocessing']['kalman_Q_scale'],
+                                                                       config['preprocessing']['kalman_R_scale'])
+
+                # Savitzky-Golay filtering
+                sg_filt_arr: np.ndarray = savgol_filter(kalman_filt_arr,
+                                                        config['preprocessing']['savgol_window_length'],
+                                                        config['preprocessing']['savgol_polyorder'])
+
+                landmark_data_lst.append(sg_filt_arr)
+
+            filtered_landmarks[landmark_name] = landmark_data_lst
+
+        return filtered_landmarks
 
 
 def save_hands_to_csv(video_name: str, res_dir: str, marker_dict: dict, body_part_name_lst: list,
