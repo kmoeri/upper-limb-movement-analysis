@@ -8,7 +8,7 @@ from mediapipe.framework.formats import landmark_pb2
 from mediapipe.python import solutions
 
 # modules
-import utils
+from src import utils
 
 # order corresponding to the MediaPipe convention
 HAND_POINTS_LEFT = [
