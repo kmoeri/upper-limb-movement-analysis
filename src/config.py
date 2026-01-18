@@ -1,10 +1,16 @@
+# src/config.py
+
 # libraries
 import os
 import toml
 from types import MappingProxyType
 
+
+# project path
+project_path: str = os.path.dirname(os.path.abspath(__file__))
+
 # config path
-config_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.toml")
+config_path: str = os.path.join(project_path, "config.toml")
 
 
 # recursively load items to make them immutable
