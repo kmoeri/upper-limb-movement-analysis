@@ -111,8 +111,8 @@ def run_batch_tracking():
     pose_name_lst: list = config['body_parts']['pose_landmark_lst']
 
     # load hand and pose tracking model paths
-    hand_model_path: str = 'mp_models/hand_landmarker.task'
-    pose_model_path: str = 'mp_models/pose_landmarker_heavy.task'
+    hand_model_path: str = os.path.join(project_path,'mp_models', 'hand_landmarker.task')
+    pose_model_path: str = os.path.join(project_path,'mp_models', 'pose_landmarker_heavy.task')
 
     # source and destination path
     tracking_src_path: str = os.path.join(project_path, 'data', '01_raw_videos')
@@ -146,9 +146,9 @@ def run_batch_tracking():
         # create tasks for both (1) hand and (2) pose tracking
         for video_path in video_path_lst:
             # (1) task for hand tracking
-            all_tasks.append((video_path, out_fpath, res_path_lst, 1, hand_model_path, hand_name_lst))
+            all_tasks.append((video_path, out_fpath, res_path_lst, hand_model_path, hand_name_lst, 1))
             # (2) task for pose Tracking
-            all_tasks.append((video_path, out_fpath, res_path_lst, 2, pose_model_path, pose_name_lst))
+            all_tasks.append((video_path, out_fpath, res_path_lst, pose_model_path, pose_name_lst, 2))
 
     # define multiple workers for parallel execution
     MAX_WORKERS = config['batch_tracking']['max_workers']
