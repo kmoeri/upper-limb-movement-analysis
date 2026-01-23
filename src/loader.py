@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 
 # modules
-from src.config import config
+from src.config import config, project_path
 from src.core import Participant, Exercise
+from src.utils import ToolBox
 
 # look-up-table to map file names with exercise names
 EXERCISE_LUT = {
@@ -56,9 +57,9 @@ def load_video_files(video_path: str) -> list[str]:
     return sorted(video_files)
 
 
-def parse_filename(video_fpath: str) -> tuple:
+def parse_filename(fpath: str) -> tuple:
     """
-    Parses the base video file name into exercise information elements:
+    Parses the base file name into exercise information elements:
     - participant ID
     - visit ID
     - affected side of participant (R or L)
@@ -67,13 +68,13 @@ def parse_filename(video_fpath: str) -> tuple:
     - exercise side (R or L)
 
     Args:
-        video_fpath (str): video file path.
+        fpath (str): video file path.
 
     Returns:
         tuple: tuple containing exercise information.
     """
     # Filename: Project_PID_CamType_VisitID_ExerciseID_CamID
-    filename: str = os.path.basename(video_fpath)
+    filename: str = os.path.basename(fpath)
     f_splits: list = filename.split('_')
     p_id: str = f_splits[1]
     visit_id: str = f_splits[3]
@@ -88,13 +89,13 @@ def parse_filename(video_fpath: str) -> tuple:
 
     # check which side ('R' or 'L') corresponds to the current 'side_condition'
     affected_sides_lst: list[list] = config['participant_info']['affected_side']
-    affected_side: list = [x for x in affected_sides_lst if x[0] == p_id][0]
+    affected_side: str = [x for x in affected_sides_lst if x[0] == p_id][0][1]
 
     if len(affected_side) == 0:
         raise ValueError(f'Participant {p_id} was not found.')
 
     if ex_condition == 'Affected':
-        ex_side: str = affected_side[1]
+        ex_side: str = affected_side
     else:
         ex_side: str = 'L' if affected_side == 'R' else 'R'
 
@@ -159,23 +160,31 @@ def load_participants(csv_file_paths: list) -> None:
         # 1) parse file name
         p_id, visit_id, affected_side, ex_name, side_condition, ex_side = parse_filename(csv_file_path)
 
-        # 2) load or create participant object
-        if p_id not in all_participants:
-            p: Participant = Participant(p_id, visit_id, affected_side)
-            all_participants[p_id] = p
+        # 2) create unique keys
+        session_key = f'{p_id}_{visit_id}'
 
-        # 3) load csv data
+        # 3) load or create participant object
+        if session_key not in all_participants:
+            p: Participant = Participant(p_id, visit_id, affected_side)
+            all_participants[session_key] = p
+
+        # 4) load csv data
         raw_landmarks: dict = load_landmarks_to_dict(csv_file_path)
 
-        # 4) create exercise object
+        # 5) preprocessing
+        tb: ToolBox = ToolBox()
+        processed_landmarks: dict = tb.filter_landmarks(raw_landmarks)
+        pixel_landmarks: dict = tb.normalize_to_aspect_ratio(processed_landmarks)
+
+        # 6) create exercise object
         ex: Exercise = Exercise(visit_id=visit_id, exercise_id=ex_name,
                                 side_condition=side_condition, side_focus=ex_side,
-                                raw_landmarks=raw_landmarks)
+                                raw_landmarks=raw_landmarks, px_landmarks=pixel_landmarks)
 
         # add exercise object to participant
-        all_participants[p_id].add_exercise(ex)
+        all_participants[session_key].add_exercise(ex)
 
-    # 5) save participant objects
+    # 6) save participant objects
     for p in all_participants.values():
-        p.save(f'data/03_processed/{p.pid}.pickle')
+        p.save(f'{project_path}/data/03_processed')
 
