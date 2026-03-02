@@ -12,17 +12,20 @@ from src.tracking import combined_landmark_extractor
 from src.loader import load_video_files
 
 
-def save_tracked_landmarks_to_csv(video_name: str, out_dir: str, marker_dict: dict, body_part_name_lst: list,
-                                  tracking_selection: int) -> None:
+def save_tracked_landmarks_to_csv(video_name: str, out_dir: str,
+                                  pose_dict: dict, hands_dict: dict,
+                                  pose_name_lst: list, hand_name_lst: list) -> None:
     """
-    Saves tracked landmark coordinates to a csv file.
+    Saves tracked landmark coordinates of hands and pose to a single csv file.
+    Lower limb pose landmarks (idc 25-32) are explicitly removed before saving.
 
     Args:
-        video_name (str): Absolute path of the video file.
+        video_name (str): Base name of the video file to be saved.
         out_dir (str): Directory to save the csv file.
-        marker_dict (dict): Dictionary of landmarks and their corresponding 3D coordinates.
-        body_part_name_lst (list): List of body part names corresponding to the landmarks.
-        tracking_selection (int): Whether hands or pose were tracked. 1: hand tracking, 2: pose tracking.
+        pose_dict (dict): Dictionary of pose landmarks and their corresponding 3D coordinates.
+        hands_dict (dict): Dictionary of hand landmarks and their corresponding 3D coordinates.
+        pose_name_lst (list): List of body part names corresponding to the pose landmarks.
+        hand_name_lst (list): List of body part names corresponding to the hand landmarks.
 
     Returns:
         None
@@ -30,30 +33,30 @@ def save_tracked_landmarks_to_csv(video_name: str, out_dir: str, marker_dict: di
 
     # flatten marker data
     flattened_data: dict = {}
-    for frame, landmarks in marker_dict.items():
-        landmark_lst = landmarks
 
-        # if pose was tracked: keep upper limb landmarks only (indices 0 to 24)
-        if tracking_selection == 'pose':
-            landmark_lst = landmarks[:25]
+    # hands and pose landmarks should have the same number of frames as they were extracted simultaneously
+    for frame in pose_dict.keys():
 
-        # flatten the list of tuples into a single list of coordinates
-        flattened_data[frame] = [coord for landmark in landmark_lst for coord in landmark]
+        # get the upper limb pose landmarks
+        pose_lst = pose_dict[frame][:25]
 
-    # get landmark names
-    landmark_name_lst: list[str] = body_part_name_lst
+        # get the hand landmarks
+        hand_lst = hands_dict[frame]
 
-    # if pose was tracked: keep upper limb landmark names only
-    if tracking_selection == 'pose':
-        # extract landmarks from the hips up
-        landmark_name_lst = body_part_name_lst[:25]
+        # flatten the lists of tuples into a single list of coordinates for the current frame
+        flat_pose = [coord for landmark in pose_lst for coord in landmark]
+        flat_hand = [coord for landmark in hand_lst for coord in landmark]
+
+        # append the flat lists
+        flattened_data[frame] = flat_pose + flat_hand
+
+    # get landmark names of hands and pose
+    combined_name_lst: list[str] = pose_name_lst[:25] + hand_name_lst
 
     # creat column names
     col_names: list[str] = []
-    for bodypart in landmark_name_lst:
-        col_names.append(f'{bodypart}_x')
-        col_names.append(f'{bodypart}_y')
-        col_names.append(f'{bodypart}_z')
+    for bodypart in combined_name_lst:
+        col_names.extend([f'{bodypart}_x', f'{bodypart}_y', f'{bodypart}_z'])
 
     marker_df = pd.DataFrame.from_dict(flattened_data, orient='index', columns=col_names)
     marker_df.index.name = 'frame'
@@ -77,11 +80,10 @@ def process_single_video(video_task) -> str:
     vid_path, out_path, out_path_lst, model_paths, pose_name_lst, hand_name_lst = video_task
 
     vid_name_base: str = (os.path.basename(vid_path)).split('.')[0]
-    vid_name_hands: str = f'{vid_name_base}_hands.csv'
-    vid_name_pose: str = f'{vid_name_base}_pose.csv'
+    vid_name_full: str = f'{vid_name_base}_tracked-raw.csv'
 
-    # Check if we need to process this video (if either csv is missing, we process)
-    if (vid_name_hands not in out_path_lst) or (vid_name_pose not in out_path_lst):
+    # process this video if csv is missing
+    if vid_name_full not in out_path_lst:
 
         # apply the combined tracking model
         pose_data_dict, hands_data_dict = combined_landmark_extractor(
@@ -92,14 +94,15 @@ def process_single_video(video_task) -> str:
             min_hand_detect_conf=0.5,
             min_pose_detect_conf=0.5,
             min_track_conf=0.8,
-            normalize=True,
+            normalize=False,
             visualize=False,
             save_video=True
         )
 
         # save marker data to csv for both outputs
-        save_tracked_landmarks_to_csv(vid_name_hands, out_path, hands_data_dict, hand_name_lst, 'hands')
-        save_tracked_landmarks_to_csv(vid_name_pose, out_path, pose_data_dict, pose_name_lst, 'pose')
+        save_tracked_landmarks_to_csv(vid_name_full, out_path,
+                                      pose_data_dict, hands_data_dict,
+                                      pose_name_lst, hand_name_lst)
 
         return f'Finished combined tracking for {os.path.basename(vid_path)}.'
 
