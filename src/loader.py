@@ -48,8 +48,11 @@ def load_video_files(video_path: str) -> list[str]:
     if not os.path.isdir(video_path):
         raise ValueError(f'Not a valid project path: {video_path}')
 
+    # possible file formats
+    valid_formats = ('.mp4', '.avi', '.mov', '.mkv')
+
     video_files: list[str] = [os.path.join(video_path, x) for x in os.listdir(video_path)
-                              if x.endswith('.mp4') or x.endswith('.avi')]
+                              if x.lower().endswith(valid_formats)]
 
     if not video_files:
         raise ValueError(f'No video files found in {video_path}')

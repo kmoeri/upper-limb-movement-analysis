@@ -6,8 +6,11 @@ import toml
 from types import MappingProxyType
 
 
+# src path
+src_path: str = os.path.dirname(os.path.abspath(__file__))
+
 # project path
-project_path: str = os.path.dirname(os.path.abspath(__file__))
+project_path: str = os.path.dirname(src_path)
 
 # config path
 config_path: str = os.path.join(project_path, "config.toml")

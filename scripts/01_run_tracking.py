@@ -8,7 +8,7 @@ import concurrent.futures
 
 # modules
 from src.config import config, project_path
-from src.tracking import hand_landmark_extractor, pose_landmark_extractor
+from src.tracking import combined_landmark_extractor
 from src.loader import load_video_files
 
 
@@ -28,24 +28,25 @@ def save_tracked_landmarks_to_csv(video_name: str, out_dir: str, marker_dict: di
         None
     """
 
-    # flatten pose marker data
+    # flatten marker data
     flattened_data: dict = {}
     for frame, landmarks in marker_dict.items():
         landmark_lst = landmarks
 
-        # if pose was tracked: keep upper limb landmarks only
-        if tracking_selection == 2:
-            landmark_lst = landmarks[11:17] + landmarks[23:25]
+        # if pose was tracked: keep upper limb landmarks only (indices 0 to 24)
+        if tracking_selection == 'pose':
+            landmark_lst = landmarks[:25]
 
+        # flatten the list of tuples into a single list of coordinates
         flattened_data[frame] = [coord for landmark in landmark_lst for coord in landmark]
 
     # get landmark names
     landmark_name_lst: list[str] = body_part_name_lst
 
     # if pose was tracked: keep upper limb landmark names only
-    if tracking_selection == 2:
-        # Extract only shoulders, elbows, and wrists (idc: 11-16) and add the hips (idc: 23,24)
-        landmark_name_lst = body_part_name_lst[11:17] + body_part_name_lst[23:25]
+    if tracking_selection == 'pose':
+        # extract landmarks from the hips up
+        landmark_name_lst = body_part_name_lst[:25]
 
     # creat column names
     col_names: list[str] = []
@@ -63,45 +64,46 @@ def save_tracked_landmarks_to_csv(video_name: str, out_dir: str, marker_dict: di
 
 def process_single_video(video_task) -> str:
     """
-    Worker function to process a single video for hand and/or pose tracking.
+    Worker function to process a single video for combined (hand and pose) landmark tracking.
 
     Args:
-        video_task (list): list of video path and video name.
+        video_task (tuple): tuple containing all paths and configuration lists for a single video.
 
     Returns:
         str: Message for finished tracking including the video base name.
     """
 
     # get info from video task
-    vid_path, out_path, out_path_lst, model_path, name_lst, tracking_selection = video_task
+    vid_path, out_path, out_path_lst, model_paths, pose_name_lst, hand_name_lst = video_task
 
-    # A) hand tracking
-    if tracking_selection == 1:
-        vid_name_hands: str = (os.path.basename(vid_path)).split('.')[0] + '_hands.csv'
+    vid_name_base: str = (os.path.basename(vid_path)).split('.')[0]
+    vid_name_hands: str = f'{vid_name_base}_hands.csv'
+    vid_name_pose: str = f'{vid_name_base}_pose.csv'
 
-        if vid_name_hands not in out_path_lst:
-            # apply hands tracking model
-            hands_data_dict: dict = hand_landmark_extractor(vid_path, out_path, model_path, n_hands=2,
-                                                            min_hand_detect_conf=0.5, min_hand_track_conf=0.8,
-                                                            normalize=True, visualize=False, save_video=True)
-            # save marker data to csv
-            save_tracked_landmarks_to_csv(vid_name_hands, out_path, hands_data_dict, name_lst, tracking_selection)
-            return f'Finished hand tracking for {os.path.basename(vid_path)}.'
+    # Check if we need to process this video (if either csv is missing, we process)
+    if (vid_name_hands not in out_path_lst) or (vid_name_pose not in out_path_lst):
 
-    # B) pose tracking
-    elif tracking_selection == 2:
-        vid_name_pose: str = (os.path.basename(vid_path)).split('.')[0] + '_pose.csv'
+        # apply the combined tracking model
+        pose_data_dict, hands_data_dict = combined_landmark_extractor(
+            video_path=vid_path,
+            res_path=out_path,
+            model_paths=model_paths,
+            n_hands=2,
+            min_hand_detect_conf=0.5,
+            min_pose_detect_conf=0.5,
+            min_track_conf=0.8,
+            normalize=True,
+            visualize=False,
+            save_video=True
+        )
 
-        if vid_name_pose not in out_path_lst:
-            # apply pose tracking model
-            pose_data_dict: dict = pose_landmark_extractor(vid_path, out_path, model_path,
-                                                           min_pose_detect_conf=0.5, min_pose_track_conf=0.8,
-                                                           normalize=True, visualize=False, save_video=True)
-            # save marker data to csv
-            save_tracked_landmarks_to_csv(vid_name_pose, out_path, pose_data_dict, name_lst, tracking_selection)
-            return f'Finished pose tracking for {os.path.basename(vid_path)}.'
+        # save marker data to csv for both outputs
+        save_tracked_landmarks_to_csv(vid_name_hands, out_path, hands_data_dict, hand_name_lst, 'hands')
+        save_tracked_landmarks_to_csv(vid_name_pose, out_path, pose_data_dict, pose_name_lst, 'pose')
 
-    return f'Warning: Nothing was processed for {os.path.basename(vid_path)}.'
+        return f'Finished combined tracking for {os.path.basename(vid_path)}.'
+
+    return f'Skipped {os.path.basename(vid_path)} (already processed).'
 
 
 def run_batch_tracking():
@@ -115,13 +117,13 @@ def run_batch_tracking():
     pose_model_path: str = os.path.join(project_path,'mp_models', 'pose_landmarker_heavy.task')
 
     # source and destination path
-    tracking_src_path: str = os.path.join(project_path, 'data', '01_raw_videos')
-    tracking_out_path: str = os.path.join(project_path, 'data', '02_mediapipe_raw')
+    tracking_src_path: str = os.path.join(project_path, 'data', '01_videos-raw')
+    tracking_out_path: str = os.path.join(project_path, 'data', '02_mediapipe-raw')
 
-    # load all file names in source directory
+    # load all participant folders (e.g., P001, P002, etc.) in the tracking src path
     participant_fname_lst: list = [x for x in sorted(os.listdir(tracking_src_path)) if x.startswith('P')]
 
-    # list with all videos of exercises from all participants
+    # list with all participant folders
     all_tasks = []
 
     # process for each participant
@@ -137,18 +139,21 @@ def run_batch_tracking():
         # create a directory for the resulting files (skip if already existing)
         os.makedirs(out_fpath, exist_ok=True)
 
-        # create a list of already existing result files
-        res_path_lst: list[str] = [x.split('.')[0] for x in os.listdir(out_fpath)
-                                   if x.endswith('.csv')] if os.listdir(out_fpath) else []
+        # create a list of already existing result files (including both pose and hands csv)
+        res_path_lst: list[str] = os.listdir(out_fpath) if os.path.exists(out_fpath) else []
 
         print(f'Queueing videos of {participant_fname}...')
 
-        # create tasks for both (1) hand and (2) pose tracking
+        # create a single task for each video containing both models and name lists
         for video_path in video_path_lst:
-            # (1) task for hand tracking
-            all_tasks.append((video_path, out_fpath, res_path_lst, hand_model_path, hand_name_lst, 1))
-            # (2) task for pose Tracking
-            all_tasks.append((video_path, out_fpath, res_path_lst, pose_model_path, pose_name_lst, 2))
+            all_tasks.append((
+                video_path,
+                out_fpath,
+                res_path_lst,
+                (pose_model_path, hand_model_path),
+                pose_name_lst,
+                hand_name_lst
+            ))
 
     # define multiple workers for parallel execution
     MAX_WORKERS = config['batch_tracking']['max_workers']
