@@ -77,7 +77,7 @@ def process_single_video(video_task) -> str:
     """
 
     # get info from video task
-    vid_path, out_path, out_path_lst, model_paths, pose_name_lst, hand_name_lst = video_task
+    vid_path, out_path, out_path_lst, model_paths, pose_name_lst, hand_name_lst, normalize_bool, save_vid = video_task
 
     vid_name_base: str = (os.path.basename(vid_path)).split('.')[0]
     vid_name_full: str = f'{vid_name_base}_tracked-raw.csv'
@@ -94,9 +94,9 @@ def process_single_video(video_task) -> str:
             min_hand_detect_conf=0.5,
             min_pose_detect_conf=0.5,
             min_track_conf=0.8,
-            normalize=False,
+            normalize=normalize_bool,
             visualize=False,
-            save_video=True
+            save_video=save_vid
         )
 
         # save marker data to csv for both outputs
@@ -122,6 +122,12 @@ def run_batch_tracking():
     # source and destination path
     tracking_src_path: str = os.path.join(project_path, 'data', '01_videos-raw')
     tracking_out_path: str = os.path.join(project_path, 'data', '02_mediapipe-raw')
+
+    # extract normalized (if True) or world coordinates (if False)
+    normalize_bool: bool = config['batch_tracking']['normalize']
+
+    # save a video file (mp4) of the tracked landmarks on top of the original video track
+    save_vid: bool = config['batch_tracking']['save_video']
 
     # load all participant folders (e.g., P001, P002, etc.) in the tracking src path
     participant_fname_lst: list = [x for x in sorted(os.listdir(tracking_src_path)) if x.startswith('P')]
@@ -155,7 +161,9 @@ def run_batch_tracking():
                 res_path_lst,
                 (pose_model_path, hand_model_path),
                 pose_name_lst,
-                hand_name_lst
+                hand_name_lst,
+                normalize_bool,
+                save_vid
             ))
 
     # define multiple workers for parallel execution
