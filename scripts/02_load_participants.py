@@ -13,7 +13,7 @@ def run_participant_loader():
 
     # load source data
     project_name = config['batch_tracking']['project_name']
-    tracked_data_src_path: str = os.path.join(project_path, 'data', '02_mediapipe_raw')
+    tracked_data_src_path: str = os.path.join(project_path, 'data', '02_mediapipe-raw')
     tracked_data_dirs: list[str] = [os.path.join(tracked_data_src_path, x)
                                     for x in sorted(os.listdir(tracked_data_src_path)) if x.startswith('P')]
 
@@ -27,7 +27,7 @@ def run_participant_loader():
     # load Participant objects
     load_participants(tracked_data_path_lst)
 
-    print('Loading finished')
+    print('Loading finished.')
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+# src/core.py
+
 # libraries
 import os
 import pickle
@@ -11,20 +13,29 @@ class Exercise:
     The Exercise class is a container for holding exercise information and storing data (tracking and metrics).
     """
     # exercise info
-    visit_id: str                                       # 'T1', 'T2', 'T3'
-    exercise_id: str                                    # 'FingerTapping', 'HandOpening', etc.
-    side_focus: str                                     # 'L' or 'R'
-    side_condition: str                                 # 'Healthy' or 'Affected'
+    visit_id: str                                               # 'T1', 'T2', 'T3'
+    exercise_id: str                                            # 'FingerTapping', 'HandOpening', etc.
+    side_condition: str                                         # 'Healthy' or 'Affected'
+    side_focus: str                                             # 'L' or 'R'
+
+    # metadata
+    cam_id: str                                                 # e.g., 'camZ'
 
     # data storage
-    raw_landmarks: dict                                 # normalized data from MediaPipe (0.0 - 1.0)
-    px_landmarks: dict                                  # aspect-ratio corrected data (pixels)
-    metrics: dict = field(default_factory=dict)         # stores results
+    raw_pose_landmarks: dict                                    # tracked pose landmarks raw
+    raw_hand_landmarks: dict                                    # tracked hand landmarks raw
+    clean_pose_landmarks: dict = field(default_factory=dict)    # preprocessed pose data (world: meters, normalized: px)
+    clean_hand_landmarks: dict = field(default_factory=dict)    # preprocessed hand data (world: meters, normalized: px)
+
+    metrics: dict = field(default_factory=dict)                 # stores results
 
 
 class Participant:
     """
     The Participant class represents one visit of a participant.
+    - participant ID
+    - visit ID
+    - affected side of participant (R or L)
     """
     def __init__(self, pid: str, visit_id: str, affected_side: str):
         self.pid = pid
@@ -49,7 +60,7 @@ class Participant:
 
     def save(self, dest_dir: str):
         # e.g.: "P001_T1.pkl"
-        filepath = os.path.join(dest_dir, f'{self.pid}_{self.visit_id}.pkl')
+        filepath = os.path.join(dest_dir, f'{self.pid}_{self.visit_id}.pickle')
         with open(filepath, 'wb') as file:
             pickle.dump(self, file)
 

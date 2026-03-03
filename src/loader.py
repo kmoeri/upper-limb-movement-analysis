@@ -69,6 +69,7 @@ def parse_filename(fpath: str) -> tuple:
     - exercise ID
     - exercise condition (Healthy or Affected)
     - exercise side (R or L)
+    - camera ID (e.g., camZ)
 
     Args:
         fpath (str): video file path.
@@ -82,6 +83,7 @@ def parse_filename(fpath: str) -> tuple:
     p_id: str = f_splits[1]
     visit_id: str = f_splits[3]
     ex_id: str = f_splits[4]
+    cam_id: str = f_splits[5]
 
     # get the exercise name from the mapping
     ex_name: str = EXERCISE_LUT.get(ex_id, 'Unknown')
@@ -102,11 +104,11 @@ def parse_filename(fpath: str) -> tuple:
     else:
         ex_side: str = 'L' if affected_side == 'R' else 'R'
 
-    return p_id, visit_id, affected_side, ex_name, ex_condition, ex_side
+    return p_id, visit_id, affected_side, ex_name, ex_condition, ex_side, cam_id
 
 
 def load_landmarks_to_dict(csv_file: str) -> dict:
-    """"
+    """
     Loads landmark data stored in a csv file into a dictionary.
     Each dict element has a label (e.g., wrist) as key and a list of ndarray for each axis (x,y,z) as value.
 
@@ -143,13 +145,13 @@ def load_landmarks_to_dict(csv_file: str) -> dict:
 
 
 def load_participants(csv_file_paths: list) -> None:
-    """"
+    """
     Loads csv files with landmark coordinate of a movement exercise and passes the data to a Participant object.
     The created Participant object is stored as a pickle file for efficient handling of different exercises
     and participants.
 
     Args:
-        csv_file_paths (list): List with absolute paths of csv files with movement data (raw normalized from MediaPipe).
+        csv_file_paths (list): List with absolute paths of csv files with movement data (raw from MediaPipe).
 
     Returns:
         None
@@ -157,11 +159,15 @@ def load_participants(csv_file_paths: list) -> None:
 
     all_participants: dict = {}
 
+    normalized: bool = config['batch_tracking']['normalize']
+    pose_name_lst = config['body_parts']['pose_landmark_lst'][:25]   # ignore the lower limbs
+    hand_name_lst: list = config['body_parts']['hands_landmark_lst']
+
     # loop through all csv files
     for csv_file_path in csv_file_paths:
 
         # 1) parse file name
-        p_id, visit_id, affected_side, ex_name, side_condition, ex_side = parse_filename(csv_file_path)
+        p_id, visit_id, affected_side, ex_name, side_condition, ex_side, cam_id = parse_filename(csv_file_path)
 
         # 2) create unique keys
         session_key = f'{p_id}_{visit_id}'
@@ -171,18 +177,30 @@ def load_participants(csv_file_paths: list) -> None:
             p: Participant = Participant(p_id, visit_id, affected_side)
             all_participants[session_key] = p
 
-        # 4) load csv data
+        # 4) load csv data to dicts
         raw_landmarks: dict = load_landmarks_to_dict(csv_file_path)
 
-        # 5) preprocessing
+        # raw dicts (pose and hands)
+        raw_pose_landmarks: dict = {k: raw_landmarks[k] for k in pose_name_lst if k in raw_landmarks}
+        raw_hand_landmarks: dict = {k: raw_landmarks[k] for k in hand_name_lst if k in raw_landmarks}
+
+        # 5) preprocess raw data
         tb: ToolBox = ToolBox()
         processed_landmarks: dict = tb.filter_landmarks(raw_landmarks)
-        pixel_landmarks: dict = tb.normalize_to_aspect_ratio(processed_landmarks)
+
+        if normalized:
+            # correct for the aspect ratio in pixels
+            processed_landmarks: dict = tb.normalize_to_aspect_ratio(processed_landmarks)
+
+        # processed dicts (pose and hands)
+        clean_pose_landmarks: dict = {k: processed_landmarks[k] for k in pose_name_lst if k in processed_landmarks}
+        clean_hand_landmarks: dict = {k: processed_landmarks[k] for k in hand_name_lst if k in processed_landmarks}
 
         # 6) create exercise object
         ex: Exercise = Exercise(visit_id=visit_id, exercise_id=ex_name,
-                                side_condition=side_condition, side_focus=ex_side,
-                                raw_landmarks=raw_landmarks, px_landmarks=pixel_landmarks)
+                                side_condition=side_condition, side_focus=ex_side, cam_id=cam_id,
+                                raw_hand_landmarks=raw_hand_landmarks, clean_hand_landmarks=clean_hand_landmarks,
+                                raw_pose_landmarks=raw_pose_landmarks, clean_pose_landmarks=clean_pose_landmarks)
 
         # add exercise object to participant
         all_participants[session_key].add_exercise(ex)
