@@ -250,6 +250,62 @@ class Visualizer:
 
         plt.close()
 
+    def viz_lmm_interaction_trajectories(self, finger_df: pd.DataFrame) -> None:
+        """
+        Creates a 'Spaghetti Plot' showing individual participant trajectories
+        from Passive to Active states, split by Healthy vs. Affected hands,
+        overlaid with the group mean to visualize the LMM interaction effect.
+        """
+
+        # aggregate the data: get the mean CoV per participant for each state (ignoring specific fingers)
+        agg_df = finger_df.groupby(['Participant', 'Hand_Condition', 'Hand_Role'])['CoV'].mean().reset_index()
+
+        # treat 'Participant' as categorical variable
+        agg_df['Participant'] = agg_df['Participant'].astype(str)
+
+        # setup seaborn FaceGrid
+        sns.set_theme(style="whitegrid")
+        num_participants: int = agg_df['Participant'].nunique()
+        gradient_cmap = sns.color_palette("viridis", n_colors=num_participants)
+        face_grid = sns.FacetGrid(agg_df, col="Hand_Condition", height=6, aspect=0.85,
+                                  col_order=['Healthy', 'Affected'], hue='Participant', palette=gradient_cmap)
+
+        # plot individual participant lines
+        face_grid.map_dataframe(sns.lineplot, x="Hand_Role", y="CoV", estimator=None,
+                                alpha=0.7, linewidth=1.5, marker="o")
+
+        # plot the group mean (fixed effect)
+        # ensure global mean: prevent seaborn from drawing a mean line for each participant
+        for ax, condition in zip(face_grid.axes.flat, ['Healthy', 'Affected']):
+            # Get ALL participants for this specific condition
+            subset = agg_df[agg_df['Hand_Condition'] == condition]
+
+            sns.lineplot(data=subset, x="Hand_Role", y="CoV", estimator='mean', errorbar=None, color="black",
+                         linewidth=3, marker="D", markersize=8, zorder=10, legend=False, ax=ax)
+
+        # formatting
+        face_grid.set_axis_labels('Hand Role (State of Movement)', 'Mean CoV (%)', fontsize=12)
+        face_grid.set_titles(col_template="{col_name} Hand", size=14, weight='bold')
+
+        # adjust y-axis to start at 0
+        face_grid.set(ylim=(0, None))
+
+        # add the legend outside the plot
+        face_grid.add_legend(title="Participant ID", bbox_to_anchor=(1.02, 0.5), loc='center left')
+
+        plt.subplots_adjust(top=0.88)
+        face_grid.figure.suptitle('Impact of Movement: Individual Trajectories (Rest vs. Active)',
+                                  fontsize=16, weight='bold')
+
+        # Save the plot
+        suffix = '.png'
+        f_name: str = 'LMM_Interaction_Trajectories' + suffix
+        f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
+
+        plt.close()
+
     # ============================================================================= #
     #                            3) PARAMETER EXTRACTION                            #
     # ============================================================================= #

@@ -5,6 +5,7 @@
 import os
 import numpy as np
 import pandas as pd
+import statsmodels.formula.api as smf
 
 # modules
 from src.config import config, project_path
@@ -297,6 +298,42 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
     return pd.DataFrame(results_lst)
 
 
+def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
+
+    # clean the dataframe: drop rows where test variables are NaN
+    lmm_df: pd.DataFrame = hand_df.dropna(subset=['CoV', 'Hand_Condition', 'Hand_Role', 'Participant']).copy()
+
+    # categorical ordering to make the 'Passive' Role and 'Healthy' Condition the baselines
+    lmm_df['Hand_Role'] = pd.Categorical(lmm_df['Hand_Role'], categories=['Passive', 'Active'], ordered=True)
+    lmm_df['Hand_Condition'] = pd.Categorical(lmm_df['Hand_Condition'], categories=['Healthy', 'Affected'], ordered=True)
+
+    # fit the model
+    try:
+        model = smf.mixedlm('CoV ~C(Hand_Condition) * C(Hand_Role)', data=lmm_df, groups=lmm_df['Participant'])
+        result = model.fit()
+
+        # extract the statistics table
+        stats_df: pd.DataFrame = result.summary().tables[1]
+
+        # save results to csv
+        csv_path: str = os.path.join(results_dir, 'lmm_temporal_consistency_stats.csv')
+        if not os.path.exists(csv_path):
+            stats_df.to_csv(csv_path)
+
+        # save full summary as txt
+        txt_path = os.path.join(results_dir, 'lmm_temporal_consistency_stats_full.txt')
+        if not os.path.exists(txt_path):
+            with open(txt_path, 'w') as f:
+                f.write(result.summary().as_text())
+
+        print(f"Linear Mixed Model results saved successfully to:\n {csv_path}\n {txt_path}")
+        return result
+
+    except Exception as e:
+        print(f'Linear Mixed Model failed to converge or encountered an error: {e}')
+        return None
+
+
 def run_temporal_consistency_check():
 
     # load participant objects
@@ -360,6 +397,12 @@ def run_temporal_consistency_check():
 
     # box plot comparison of all 4 states
     vis_util.viz_comparison_boxplot(finger_df, finger_order)
+
+    # run the LMM statistical test
+    lmm_results = get_lmm_consistency_statistics(finger_df, vis_util.temp_consistency_res_path)
+
+    # generate the LLM's interaction trajectories
+    vis_util.viz_lmm_interaction_trajectories(finger_df)
 
 
 if __name__ == '__main__':
