@@ -301,10 +301,15 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
 
 def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
     """
+    This function fits a Linear Mixed Model (LMM), performs model selection using a likelihood ratio test (LRT),
+    calculates the ICC, and saves the results to a text and a csv file.
 
-    :param hand_df:
-    :param results_dir:
-    :return:
+    Args:
+        hand_df (pd.DataFrame): Table containing the Participant, CoV, Hand_Condition, and Hand_Role
+        results_dir (str): Directory where the results are saved.
+
+    Returns:
+        final_model: Linear Mixed Model fitted on the data (generated with statsmodels)
     """
     def report_lmm_diagnostic_stats(main_effect_llf: float, interaction_effect_llf: float, likelihood_ratio_test: float,
                                     df_diff: int, p_value, model_select_txt: str, select_formula: str,
