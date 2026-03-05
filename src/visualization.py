@@ -5,6 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from scipy import stats
 
@@ -300,6 +301,37 @@ class Visualizer:
         # Save the plot
         suffix = '.png'
         f_name: str = 'LMM_Interaction_Trajectories' + suffix
+        f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
+
+        plt.close()
+
+    def viz_lmm_normality_and_homoscedasticity(self, model) -> None:
+
+        fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+
+        residuals = model.resid
+        fitted = model.fittedvalues
+
+        # plot Q-Q Plot to test normality assumption
+        sm.qqplot(residuals, line='45', fit=True, ax=ax[0], alpha=0.5,
+                  markerfacecolor='#1f77b4', markeredgecolor='none')
+
+        ax[0].set_title('Q-Q Plot of Residuals (Normality Check)', fontsize=14)
+
+        # plot Tukey-Anscombe (homoscedasticity)
+        sns.scatterplot(x=fitted, y=residuals, ax=ax[1], alpha=0.6, color="#1f77b4", edgecolor='none')
+        ax[1].axhline(y=0, color='red', linestyle='--', lw=2)
+        ax[1].set_xlabel('Fitted Values (Predicted CoV)', fontsize=12)
+        ax[1].set_ylabel('Residuals (Error)', fontsize=12)
+        ax[1].set_title('Tukey-Anscombe Plot (Homoscedasticity Check)', fontsize=14)
+
+        plt.tight_layout()
+
+        # Save the plot
+        suffix = '.png'
+        f_name: str = 'LMM_Assumption_Tests' + suffix
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')

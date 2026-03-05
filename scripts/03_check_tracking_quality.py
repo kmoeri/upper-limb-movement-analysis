@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
+from scipy.stats import chi2
 
 # modules
 from src.config import config, project_path
@@ -299,35 +300,108 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
 
 
 def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
+    """
+
+    :param hand_df:
+    :param results_dir:
+    :return:
+    """
+    def report_lmm_diagnostic_stats(main_effect_llf: float, interaction_effect_llf: float, likelihood_ratio_test: float,
+                                    df_diff: int, p_value, model_select_txt: str, select_formula: str,
+                                    random_effect_var: float, res_var: float, icc: float):
+
+        # prepare the text to save in text file
+        report_text = (
+            "====================================================================\n"
+            "     LINEAR MIXED MODEL (LMM) - STATISTICAL DIAGNOSTICS REPORT\n"
+            "====================================================================\n\n"
+            "1. MODEL SELECTION (Likelihood Ratio Test)\n"
+            "------------------------------------------\n"
+            f"   - Null Model (Main Effects Only) LLF: {main_effect_llf:.4f}\n"
+            f"   - Full Model (With Interaction) LLF:  {interaction_effect_llf:.4f}\n"
+            f"   - LR Statistic (Chi-Square):          {likelihood_ratio_test:.4f}\n"
+            f"   - Degrees of Freedom Diff:            {df_diff}\n"
+            f"   - P-value:                            {p_value:.4e}\n"
+            f"   - Conclusion:\n"
+            f"   -> {model_select_txt}\n"
+            f"   - Selected Formula:\n"
+            f"   -> {select_formula}\n\n"
+            "2. VARIANCE PARTITIONING (ICC)\n"
+            "------------------------------\n"
+            f"   - Random Effect Variance (Participants): {random_effect_var:.4f}\n"
+            f"   - Residual Variance (Unexplained Noise): {res_var:.4f}\n"
+            f"   - ICC: {icc:.3f} ({(icc * 100):.1f}% of unexplained variance is due to participant baselines)\n\n\n"
+            "====================================================================\n"
+            "SUMMARY TABLE\n"
+            "====================================================================\n"
+        )
+
+        report_text += final_model.summary().as_text()
+
+        # save full report in text file
+        txt_path = os.path.join(results_dir, 'lmm_temporal_consistency_stats_full.txt')
+        if not os.path.exists(txt_path):
+            with open(txt_path, 'w') as f:
+                f.write(report_text)
+
+        print(f"Linear Mixed Model results saved successfully to:\n {txt_path}")
 
     # clean the dataframe: drop rows where test variables are NaN
     lmm_df: pd.DataFrame = hand_df.dropna(subset=['CoV', 'Hand_Condition', 'Hand_Role', 'Participant']).copy()
 
     # categorical ordering to make the 'Passive' Role and 'Healthy' Condition the baselines
+    # pd.Categorical assigns values '0' and '1' to 'Passive' (0) and Active (1), and to 'Healthy' (0) and 'Affected' (1)
+    # crucial for the model to correctly interpret the baseline ('Passive' and 'Healthy'
     lmm_df['Hand_Role'] = pd.Categorical(lmm_df['Hand_Role'], categories=['Passive', 'Active'], ordered=True)
     lmm_df['Hand_Condition'] = pd.Categorical(lmm_df['Hand_Condition'], categories=['Healthy', 'Affected'], ordered=True)
 
-    # fit the model
+    # Likelihood Ratio Test (LRT)
+    main_formula: str = 'CoV ~C(Hand_Condition) + C(Hand_Role)'
+    interaction_formula: str = 'CoV ~C(Hand_Condition) * C(Hand_Role)'
+
     try:
-        model = smf.mixedlm('CoV ~C(Hand_Condition) * C(Hand_Role)', data=lmm_df, groups=lmm_df['Participant'])
-        result = model.fit()
+        main_model = smf.mixedlm(formula=main_formula, data=lmm_df, groups=lmm_df['Participant']).fit(reml=False)
+        inter_model = smf.mixedlm(formula=interaction_formula, data=lmm_df, groups=lmm_df['Participant']).fit(reml=False)
+
+        # get the log likelihood function (llf) attribute of the fitted models - how well the models explain the data
+        llf_main = main_model.llf
+        llf_int = inter_model.llf
+        # get the difference in degrees of freedom between the models - dof: number of variables the model estimates
+        dof_diff = inter_model.df_modelwc - main_model.df_modelwc
+
+        # calculate Chi-Square statistic and p-value
+        likelihood_ratio_stat = -2 * (llf_main - llf_int)
+        p_val = chi2.sf(likelihood_ratio_stat, dof_diff)
+
+        # determine whether the interaction term significantly improves the model or not
+        if p_val < 0.05:
+            better_formula = 'CoV ~ Hand_Condition * Hand_Role'
+            model_selection_txt = 'The interaction term significantly improves the model.'
+        else:
+            better_formula = 'CoV ~ Hand_Condition + Hand_Role'
+            model_selection_txt = 'The interaction term does not significantly improve the model.'
+
+        # re-fit the model with the better formula (reml=True, default)
+        final_model = smf.mixedlm(formula=better_formula, data=lmm_df, groups=lmm_df['Participant']).fit()
+
+        # extract variances: cov_re is the random effect variance and scale is the residual variance
+        rand_effect_var = final_model.cov_re.iloc[0, 0]
+        residual_var = final_model.scale
+        icc = rand_effect_var / (rand_effect_var + residual_var)
+
+        report_lmm_diagnostic_stats(llf_main, llf_int, likelihood_ratio_stat, dof_diff, p_val,
+                                    model_selection_txt, better_formula, rand_effect_var, residual_var, icc)
 
         # extract the statistics table
-        stats_df: pd.DataFrame = result.summary().tables[1]
+        stats_df: pd.DataFrame = final_model.summary().tables[1]
 
         # save results to csv
         csv_path: str = os.path.join(results_dir, 'lmm_temporal_consistency_stats.csv')
         if not os.path.exists(csv_path):
             stats_df.to_csv(csv_path)
 
-        # save full summary as txt
-        txt_path = os.path.join(results_dir, 'lmm_temporal_consistency_stats_full.txt')
-        if not os.path.exists(txt_path):
-            with open(txt_path, 'w') as f:
-                f.write(result.summary().as_text())
-
-        print(f"Linear Mixed Model results saved successfully to:\n {csv_path}\n {txt_path}")
-        return result
+        print(f"Linear Mixed Model results saved successfully to:\n {csv_path}")
+        return final_model
 
     except Exception as e:
         print(f'Linear Mixed Model failed to converge or encountered an error: {e}')
@@ -403,6 +477,9 @@ def run_temporal_consistency_check():
 
     # generate the LLM's interaction trajectories
     vis_util.viz_lmm_interaction_trajectories(finger_df)
+
+    # generate Q-Q plot and Tukey-Anscombe (homoscedasticity) to test model assumptions
+    vis_util.viz_lmm_normality_and_homoscedasticity(lmm_results)
 
 
 if __name__ == '__main__':
