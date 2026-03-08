@@ -1,5 +1,6 @@
-# Libraries
+# src/utils.py
 
+# libraries
 # standard
 import os
 import numpy as np
@@ -14,97 +15,7 @@ from scipy.spatial.transform import Rotation
 
 # modules
 from src.config import config
-
-
-# look-up-table to map file names with exercise names
-EXERCISE_LUT = {
-    # WT-01 & WT-02 pair -> Index Finger Tapping on Thenar
-    'WT-01': 'FingerTapping',
-    'WT-02': 'FingerTapping',
-
-    # WT-03 & WT-04 pair -> Finger Alternation Tapping
-    'WT-03': 'FingerAlternation',
-    'WT-04': 'FingerAlternation',
-
-    # WT-05 & WT-06 pair -> Hand Opening and Closing
-    'WT-05': 'HandOpening',
-    'WT-06': 'HandOpening',
-
-    # WT-07 & WT-08 pair -> Hand Pronation/Supination
-    'WT-07': 'ProSup',
-    'WT-08': 'ProSup',
-
-    # WT-09 & WT-10 pair -> Finger Tapping on Table
-    'WT-09': 'TableTapping',
-    'WT-10': 'TableTapping',
-}
-
-
-def import_video_files(video_path: str) -> list[str]:
-    """
-    Imports video files from a given project folder.
-
-    Args:
-        video_path (str): Path to the project folder.
-
-    Returns:
-        list: List of video file paths.
-    """
-
-    if not os.path.isdir(video_path):
-        raise ValueError(f'Not a valid project path: {video_path}')
-
-    video_files: list[str] = [os.path.join(video_path, x) for x in os.listdir(video_path)
-                              if x.endswith('.mp4') or x.endswith('.avi')]
-
-    if not video_files:
-        raise ValueError(f'No video files found in {video_path}')
-
-    return sorted(video_files)
-
-
-def parse_filename(video_fpath: str, affected_sides_lst: list) -> tuple[str, str, str, str, str]:
-    """
-    Parses the base video file name into exercise information elements:
-    - participant ID
-    - visit ID
-    - exercise ID
-    - side condition (Healthy or Affected)
-    - exercise side (R or L)
-
-    Args:
-        video_fpath (str): video file path.
-        affected_sides_lst (list): List of lists. Each list contains the participant ID and affected side ('R' or 'L').
-
-    Returns:
-        tuple: tuple containing exercise information.
-    """
-    # Filename: Project_PID_CamType_VisitID_ExerciseID_CamID
-    filename: str = os.path.basename(video_fpath)
-    f_splits: list = filename.split('_')
-    p_id: str = f_splits[1]
-    visit_id: str = f_splits[3]
-    ex_id: str = f_splits[4]
-
-    # get the exercise name from the mapping
-    ex_name: str = EXERCISE_LUT.get(ex_id, 'Unknown')
-
-    # check whether the current side is 'Healthy' or 'Affected'
-    ex_num: int = int(ex_id.split('-')[1])
-    side_condition: str = 'Healthy' if ex_num % 2 == 0 else 'Affected'
-
-    # check which side ('R' or 'L') corresponds to the current 'side_condition'
-    affected_side: list = [x for x in affected_sides_lst if x[0] == p_id][0]
-
-    if len(affected_side) == 0:
-        raise ValueError(f'Participant {p_id} was not found.')
-
-    if side_condition == 'Affected':
-        ex_side: str = affected_side[1]
-    else:
-        ex_side: str = 'L' if affected_side == 'R' else 'R'
-
-    return p_id, visit_id, ex_name, side_condition, ex_side
+from src.core import Participant
 
 
 class ToolBox:
@@ -124,39 +35,36 @@ class ToolBox:
         self.fps: float = fps
 
     @staticmethod
-    def load_landmarks_to_dict(csv_file: str) -> dict:
-        """"
-        Loads landmark data stored in a csv file into a dictionary.
-        Each dict element has a label (e.g., wrist) as key and a list of ndarray for each axis (x,y,z) as value.
+    def shift_origin_to_shoulders(landmarks_dict: dict, shoulder_name_l: str, shoulder_name_r: str) -> dict:
+        # TODO: docstring
+        # calculate the center between both shoulders
+        center_x: np.ndarray = (landmarks_dict[shoulder_name_l][0] + landmarks_dict[shoulder_name_r][0]) / 2.0
+        center_y: np.ndarray = (landmarks_dict[shoulder_name_l][1] + landmarks_dict[shoulder_name_r][1]) / 2.0
+        center_z: np.ndarray = (landmarks_dict[shoulder_name_l][2] + landmarks_dict[shoulder_name_r][2]) / 2.0
 
-        Args:
-            csv_file (str): Absolute path of the csv file.
+        # subtract the calculated center from all landmarks
+        for landmark_name in landmarks_dict.keys():
+            landmarks_dict[landmark_name][0] -= center_x
+            landmarks_dict[landmark_name][1] -= center_y
+            landmarks_dict[landmark_name][2] -= center_z
 
-        Returns:
-            dict: Dictionary of landmarks and their corresponding 3D coordinates.
-        """
+        return landmarks_dict
 
-        # read csv data in a pandas DataFrame
-        landmarks_df: pd.DataFrame = pd.read_csv(csv_file)
-        landmarks_dict: dict = dict()
+    @staticmethod
+    def snap_hands_to_pose(landmarks_dict: dict, pose_wrist_name: str, hand_wrist_name: str,
+                           target_hand_landmarks: list) -> dict:
+        # TODO: docstring
+        # calculate the spatial offset between the pose wrist and the hand wrist landmark
+        offset_x: np.ndarray = landmarks_dict[pose_wrist_name][0] - landmarks_dict[hand_wrist_name][0]
+        offset_y: np.ndarray = landmarks_dict[pose_wrist_name][1] - landmarks_dict[hand_wrist_name][1]
+        offset_z: np.ndarray = landmarks_dict[pose_wrist_name][2] - landmarks_dict[hand_wrist_name][2]
 
-        # get a list of the base label names (without axis appendix)
-        base_names: list[str] = [label[:-2] for label in landmarks_df.columns if label.endswith('_x')]
-
-        for label in base_names:
-
-            try:
-                # get single axis arrays
-                x_landmark_data: np.ndarray = landmarks_df[f'{label}_x'].values
-                y_landmark_data: np.ndarray = landmarks_df[f'{label}_y'].values
-                z_landmark_data: np.ndarray = landmarks_df[f'{label}_z'].values
-
-                # store all axes in dict using the corresponding label
-                landmarks_dict[label] = [x_landmark_data, y_landmark_data, z_landmark_data]
-
-            except KeyError as e:
-                print(f'Warning: Missing coordinate column for {label}: {e}')
-                continue
+        # this offset is added to every landmark of the hand model to snapp the wrist landmarks on top of each other
+        for landmark_name in target_hand_landmarks:
+            if landmark_name in landmarks_dict:
+                landmarks_dict[landmark_name][0] += offset_x
+                landmarks_dict[landmark_name][1] += offset_y
+                landmarks_dict[landmark_name][2] += offset_z
 
         return landmarks_dict
 
@@ -361,88 +269,117 @@ class ToolBox:
 
         return filtered_landmarks
 
+    @staticmethod
+    def calculate_3d_segment_lengths(landmarks_df: pd.DataFrame, landmark_link_lst: list[list[str]]) -> pd.DataFrame:
+        """
+        Calculates the 3D segment lengths for all frames in the DataFrame using vectorized operations.
 
-def save_hands_to_csv(video_name: str, res_dir: str, marker_dict: dict, body_part_name_lst: list,
-                      multi_header: bool = False) -> None:
-    """
-    Saves motion data of the tracked hand landmarks to a csv file.
+        Args:
+            landmarks_df (pd.DataFrame): dataframe containing 'landmark_x', 'landmark_y', 'landmark_z' landmarks.
+            landmark_link_lst (list): List of connected landmark pairs, e.g., [['wrist1', 'cmc11'], ...].
 
-    Args:
-        video_name (str): Absolute path of the video file.
-        res_dir (str): Directory to save the csv file.
-        marker_dict (dict): Dictionary of landmarks and their corresponding 3D coordinates.
-        body_part_name_lst (list): List of body part names corresponding to the landmarks.
-        multi_header (bool, optional): Whether to include multiple headers. Defaults to False.
+        Returns:
+            pd.DataFrame: A new DataFrame with columns for each segment length.
+        """
 
-    Returns:
-        None
-    """
+        segment_len_dict: dict = {}
 
-    # flatten marker data returned from mediapipe's landmark detection
-    flattened_data: dict = {}
-    for frame, landmarks in marker_dict.items():
-        flattened_data[frame] = [coord for landmark in landmarks for coord in landmark]
+        # run for each body part combination (list) in segment list
+        for bp1_name, bp2_name in landmark_link_lst:
 
-    if multi_header:
-        # Create the multi level header for the columns
-        first_level_names: list = [name for name in body_part_name_lst for _ in range(3)]
-        second_level_names: list[str] = ['x', 'y', 'z'] * len(body_part_name_lst)
-        multi_index: pd.MultiIndex = pd.MultiIndex.from_arrays([first_level_names, second_level_names],
-                                                               names=['bodypart', 'axis'])
+            segment_name = f'{bp1_name}-{bp2_name}'
 
-        # Create the DataFrame with the flattened data and the multi level header
-        marker_df: pd.DataFrame = pd.DataFrame.from_dict(flattened_data, orient='index', columns=multi_index)
+            # extract landmark coordinate columns (x, y, z) from landmark dataframe (movement data)
+            try:
+                # extract x, y, and z coordinates for both landmarks across all rows (frames)
+                p1 = landmarks_df[[f'{bp1_name}_x', f'{bp1_name}_y', f'{bp1_name}_z']].values
+                p2 = landmarks_df[[f'{bp2_name}_x', f'{bp2_name}_y', f'{bp2_name}_z']].values
+            except KeyError as e:
+                print(f'Warning: missing column {e} for segment {segment_name}. Skipping.')
+                continue
 
-    else:
+            # subtraction (diffs is an N x 3 array, where N is the number of frames)
+            diffs = p1 - p2
 
-        col_names: list[str] = []
-        for bodypart in body_part_name_lst:
-            col_names.append(f'{bodypart}_x')
-            col_names.append(f'{bodypart}_y')
-            col_names.append(f'{bodypart}_z')
+            # squared difference
+            diffs_squared = diffs ** 2
 
-        marker_df = pd.DataFrame.from_dict(flattened_data, orient='index', columns=col_names)
+            # Euclidean distance (L2 norm)
+            lengths = np.sqrt(np.sum(diffs_squared, axis=1))
 
-    marker_df.index.name = 'frame'
+            # store the calculated lengths (an array of length N)
+            segment_len_dict[segment_name] = lengths
 
-    # Save the DataFrame to a CSV file
-    marker_df.to_csv(os.path.join(res_dir, video_name))
+        return pd.DataFrame(segment_len_dict, index=landmarks_df.index)
 
+    def calculate_3d_hand_rotation(self, landmarks_dict: dict) -> np.ndarray:
 
-def save_pose_to_csv(video_name: str, res_dir: str, marker_dict: dict, body_part_name_lst: list) -> None:
-    """
-    Saves motion data of the tracked pose landmarks to a csv file.
+        def _get_wrist_coordinate_system(landmarks_dict: dict) -> tuple:
+            """
+                Calculates the coordinate system of the wrist by spanning a triangular surface:
+                wrist -> index finger mcp -> little finger mcp <- wrist.
+                The x-axis is aligned from the wrist distal to the center between index mcp and little finger mcp.
+                The z-axis vector is represented by the normal of the back of the hand.
+                The y-axis results from the cross product of the other two vectors and is directed medially.
 
-    Args:
-        video_name (str): Absolute path of the video file.
-        res_dir (str): Directory to save the csv file.
-        marker_dict (dict): Dictionary of landmarks and their corresponding 3D coordinates.
-        body_part_name_lst (list): List of body part names corresponding to the landmarks.
+                Args:
+                    landmarks_dict (dict): Dictionary of normalized landmarks (3D coordinates).
 
-    Returns:
-        None
-    """
+                Returns:
+                    x_vec_norm (np.ndarray): x-axis vector of wrist.
+                    y_vec_norm (np.ndarray): y-axis vector of wrist.
+                    z_vec_norm (np.ndarray): z-axis vector of wrist.
+                    wrist_coord (np.ndarray): mediapipe coordinate of wrist.
+                    norm_x (np.ndarray): L2 distance from wrist to midpoint of mcp.
+                """
 
-    # Extract only shoulders, elbows, and wrists (idc: 11-16) and add the hips (idc: 23,24)
-    pose_marker_name_lst = body_part_name_lst[11:17] + body_part_name_lst[23:25]
+            hand_of_focus: str = landmark_lst[0][-1]
 
-    # flatten pose marker data
-    flattened_ul_data: dict = {}
-    for frame, landmarks in marker_dict.items():
-        upper_body_landmarks = landmarks[11:17] + landmarks[23:25]
-        flattened_ul_data[frame] = [coord for landmark in upper_body_landmarks for coord in landmark]
+            coord_suffix = ['x', 'y', 'z']
+            landmark_name_lst: list = [f'{landmark}_{axis}' for landmark in landmark_lst for axis in coord_suffix]
 
-    col_names: list[str] = []
-    for bodypart in pose_marker_name_lst:
-        col_names.append(f'{bodypart}_x')
-        col_names.append(f'{bodypart}_y')
-        col_names.append(f'{bodypart}_z')
+            # landmark coordinates
+            wrist_coord: np.ndarray = motion_df[
+                [landmark_name_lst[0], landmark_name_lst[1], landmark_name_lst[2]]].values
+            index_base_coord: np.ndarray = motion_df[
+                [landmark_name_lst[3], landmark_name_lst[4], landmark_name_lst[5]]].values
+            pinky_base_coord: np.ndarray = motion_df[
+                [landmark_name_lst[6], landmark_name_lst[7], landmark_name_lst[8]]].values
 
-    marker_df = pd.DataFrame.from_dict(flattened_ul_data, orient='index', columns=col_names)
-    marker_df.index.name = 'frame'
+            # get the center between index and pinky to align the x vector with the axis of the hand
+            index_pinky_center_coord_out: np.ndarray = index_base_coord + 0.5 * (pinky_base_coord - index_base_coord)
+            index_pinky_center_coord_in: np.ndarray = pinky_base_coord - 0.5 * (pinky_base_coord - index_base_coord)
 
-    # Save the DataFrame to a CSV file
-    marker_df.to_csv(os.path.join(res_dir, video_name))
+            # local hand vectors with origin at wrist
+            y_vec: np.ndarray = 0.5 * (index_pinky_center_coord_out + index_pinky_center_coord_in) - wrist_coord
+            z_vec: np.ndarray = np.cross((index_base_coord - wrist_coord), (pinky_base_coord - wrist_coord))
+
+            if hand_of_focus == '1':
+                # Left Hand
+                z_vec = z_vec * (-1)
+                x_vec: np.ndarray = np.cross(y_vec, z_vec)
+            else:
+                # Right hand
+                x_vec: np.ndarray = np.cross(y_vec, z_vec)
+
+            # L2 norm / vector magnitude
+            norm_x: np.ndarray = np.linalg.norm(x_vec, axis=1)
+            norm_y: np.ndarray = np.linalg.norm(y_vec, axis=1)
+            norm_z: np.ndarray = np.linalg.norm(z_vec, axis=1)
+
+            # normalize by broadcasting (catch divisions by zero --> returns a vector of zeros)
+            x_vec_norm: np.ndarray = np.divide(x_vec, norm_x[:, np.newaxis], out=np.zeros_like(x_vec),
+                                               where=norm_x[:, np.newaxis] != 0)
+            y_vec_norm: np.ndarray = np.divide(y_vec, norm_y[:, np.newaxis], out=np.zeros_like(y_vec),
+                                               where=norm_y[:, np.newaxis] != 0)
+            z_vec_norm: np.ndarray = np.divide(z_vec, norm_z[:, np.newaxis], out=np.zeros_like(z_vec),
+                                               where=norm_z[:, np.newaxis] != 0)
+
+            return x_vec_norm, y_vec_norm, z_vec_norm, wrist_coord, norm_y
+
+        # get hand landmarks for wrist coordinate system calc
+
+        pass
 
 
 def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
@@ -473,85 +410,6 @@ def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
             return 'Right'
 
     return None
-
-
-def group_motion_files_by_exercise(file_path_lst: list[str]) -> dict:
-    """
-    Groups file paths based on a two-digit ExerciseNumber embedded in the basename of the motion data file.
-
-    File name structure:
-    ProjectName_ParticipantID_CameraType_VisitNumber_Assessment-ExerciseNumber_CameraAngle_ModelType_Status.csv
-
-    Args:
-        file_path_lst (list[str]): A list of absolute file paths.
-
-    Returns:
-        Dict[str, list[str]]: A dictionary where keys are 'ExerciseNumber' (e.g., '01', '02') and values are lists
-        of corresponding file paths.
-    """
-
-    exercise_dict: dict[str, list[str]] = {}
-
-    for file_path in file_path_lst:
-
-        file_basename = os.path.basename(file_path)
-
-        try:
-            # get exercise number from file name
-            exercise_name: str = file_basename.split('_')[4]
-            exercise_num: str = exercise_name.split('-')[1]
-
-            # check for valid exercise number
-            if exercise_num.isdigit() and len(exercise_num) == 2:
-                exercise_dict[exercise_num].append(file_path)
-            else:
-                print(f'Warning: File skipped due to invalid exercise number: {file_basename}.')
-
-        except IndexError:
-            print(f'Warning: File skipped due to invalid exercise number: {file_basename}.')
-            continue
-
-    # returns a dictionary sorted by its keys
-    return dict(sorted(exercise_dict.items(), key=lambda item: item[0]))
-
-
-def group_motion_files_by_participants(file_path_lst: list[str]) -> dict:
-    """
-    Groups file paths based on the participant ID embedded in the basename of the motion data file.
-
-    File name structure:
-    ProjectName_ParticipantID_CameraType_VisitNumber_Assessment-ExerciseNumber_CameraAngle_ModelType_Status.csv
-
-    Args:
-        file_path_lst (list[str]): A list of absolute file paths.
-
-    Returns:
-        Dict[str, list[str]]: A dictionary where keys are 'ParticipantID' (e.g., 'P001', 'P002') and values are lists
-        of corresponding file paths.
-    """
-
-    participant_dict: dict[str, list[str]] = {}
-
-    for file_path in file_path_lst:
-
-        file_basename = os.path.basename(file_path)
-
-        try:
-            # get participant id from file name
-            participant_id: str = file_basename.split('_')[1]
-
-            # check for valid participant id
-            if participant_id.startswith('P') and participant_id[1:].isdigit():
-                participant_dict[participant_id].append(file_path)
-            else:
-                print(f'Warning: File skipped due to invalid participant ID: {file_basename}.')
-
-        except IndexError:
-            print(f'Warning: File skipped due to invalid participant ID: {file_basename}.')
-            continue
-
-    # returns a dictionary sorted by its keys
-    return dict(sorted(participant_dict.items(), key=lambda item: item[0]))
 
 
 def get_descriptive_stats(data: np.ndarray, prefix: str = ''):

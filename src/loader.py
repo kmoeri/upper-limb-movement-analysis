@@ -163,6 +163,9 @@ def load_participants(csv_file_paths: list) -> None:
     pose_name_lst = config['body_parts']['pose_landmark_lst'][:25]   # ignore the lower limbs
     hand_name_lst: list = config['body_parts']['hands_landmark_lst']
 
+    # create ToolBox object for utility function calling
+    tb: ToolBox = ToolBox()
+
     # loop through all csv files
     for csv_file_path in csv_file_paths:
 
@@ -180,12 +183,30 @@ def load_participants(csv_file_paths: list) -> None:
         # 4) load csv data to dicts
         raw_landmarks: dict = load_landmarks_to_dict(csv_file_path)
 
+        # 5) apply spatial transformation for 3D world coordinates (holistic upper limb model creation)
+        if not normalized:
+            # 5.1) shift the reference coordinate system origin from hip center to shoulder center
+            raw_landmarks = tb.shift_origin_to_shoulders(landmarks_dict=raw_landmarks,
+                                                         shoulder_name_l=pose_name_lst[11],
+                                                         shoulder_name_r=pose_name_lst[12])
+
+            # 5.2) snap the hand wrists to the pose wrists
+            # left
+            raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
+                                                  pose_wrist_name=pose_name_lst[15],
+                                                  hand_wrist_name=hand_name_lst[0],
+                                                  target_hand_landmarks=hand_name_lst[:21])
+            # right
+            raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
+                                                  pose_wrist_name=pose_name_lst[16],
+                                                  hand_wrist_name=hand_name_lst[21],
+                                                  target_hand_landmarks=hand_name_lst[21:])
+
         # raw dicts (pose and hands)
         raw_pose_landmarks: dict = {k: raw_landmarks[k] for k in pose_name_lst if k in raw_landmarks}
         raw_hand_landmarks: dict = {k: raw_landmarks[k] for k in hand_name_lst if k in raw_landmarks}
 
-        # 5) preprocess raw data
-        tb: ToolBox = ToolBox()
+        # 6) preprocess raw data
         processed_landmarks: dict = tb.filter_landmarks(raw_landmarks)
 
         if normalized:
@@ -196,7 +217,7 @@ def load_participants(csv_file_paths: list) -> None:
         clean_pose_landmarks: dict = {k: processed_landmarks[k] for k in pose_name_lst if k in processed_landmarks}
         clean_hand_landmarks: dict = {k: processed_landmarks[k] for k in hand_name_lst if k in processed_landmarks}
 
-        # 6) create exercise object
+        # 7) create exercise object
         ex: Exercise = Exercise(visit_id=visit_id, exercise_id=ex_name,
                                 side_condition=side_condition, side_focus=ex_side, cam_id=cam_id,
                                 raw_hand_landmarks=raw_hand_landmarks, clean_hand_landmarks=clean_hand_landmarks,
@@ -205,7 +226,7 @@ def load_participants(csv_file_paths: list) -> None:
         # add exercise object to participant
         all_participants[session_key].add_exercise(ex)
 
-    # 6) save participant objects
+    # 8) save participant objects
     for p in all_participants.values():
         p.save(f'{project_path}/data/03_processed')
 
