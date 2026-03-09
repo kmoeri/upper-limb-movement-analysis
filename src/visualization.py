@@ -33,6 +33,20 @@ class Visualizer:
     # ============================================================================= #
     def vis_consistency_raincloud(self, link_df: pd.DataFrame, columns_to_plot: list[str],
                                    title: str = '', x_label: str = '', y_label: str = '') -> None:
+        """
+        Generates and saves a raincloud plot (combination of a half-violin, boxplot, and stripplot)
+        to visualize the distribution of temporal consistency (CoV) across different body segments.
+
+        Args:
+            link_df (pd.DataFrame): DataFrame containing the CoV data for the selected segments.
+            columns_to_plot (list[str]): List of column names (segments) to include in the plot.
+            title (str, optional): Title of the plot and base name for the saved file. Defaults to ''.
+            x_label (str, optional): Label for the x-axis. Defaults to ''.
+            y_label (str, optional): Label for the y-axis. Defaults to ''.
+
+        Returns:
+            None
+        """
 
         sns.set_theme(style="whitegrid")
         link_palette = sns.color_palette("Set1", 5)
@@ -127,46 +141,75 @@ class Visualizer:
 
         plt.close()
 
-    def viz_comparison_subplots(self, finger_df, finger_order: list[str]) -> None:
+    def viz_comparison_subplots(self, segment_df, segment_order: list[str],
+                                segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+        """
+        Generates and saves a two-panel figure containing a grouped boxplot comparing the healthy
+        and affected sides, and a raincloud plot presenting the distribution of the affected side.
 
+        Args:
+            segment_df (pd.DataFrame): DataFrame containing the CoV, Side, and segment data.
+            segment_order (list[str]): Ordered list of segments to plot on the x-axis.
+            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+            body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
+
+        Returns:
+            None
+        """
         fig, axes = plt.subplots(1, 2, figsize=(16, 6), gridspec_kw={'width_ratios': [1, 1]})
 
         # subplot 1: grouped boxplot
-        sns.boxplot(data=finger_df,
-                    x='Finger',
+        sns.boxplot(data=segment_df,
+                    x=segment_col,
                     y='CoV',
                     hue='Side',
                     ax=axes[0],
                     palette='Set2',
-                    order=finger_order)
+                    order=segment_order)
 
         axes[0].set_title('Comparison: Healthy vs. Affected Side')
         axes[0].set_ylabel('Mean CoV (%)')
+        axes[0].set_xlabel(segment_col.replace('_', ' '))
 
         # subplot 2: raincloud of affected side - violin/strip combination
-        df_aff = finger_df[finger_df['Side'] == 'Affected']
+        df_aff = segment_df[segment_df['Side'] == 'Affected']
         sns.violinplot(
-            data=df_aff, x='Finger', y='CoV',
-            ax=axes[1], inner=None, color=".8", order=['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']
+            data=df_aff, x=segment_col, y='CoV',
+            ax=axes[1], inner=None, color=".8", order=segment_order
         )
         sns.stripplot(
-            data=df_aff, x='Finger', y='CoV',
-            ax=axes[1], alpha=0.4, order=['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']
+            data=df_aff, x=segment_col, y='CoV',
+            ax=axes[1], alpha=0.4, order=segment_order
         )
-        axes[1].set_title('Distribution of Affected Side Stability')
+        axes[1].set_title(f'Distribution of Affected {body_part} Stability')
         axes[1].set_ylabel('Mean CoV (%)')
+        axes[1].set_xlabel(segment_col.replace('_', ' '))
 
         plt.tight_layout()
 
         suffix = '.png'
-        f_name: str = 'Distribution_of_Affected_Side_Stability' + suffix
+        f_name: str = f'Distribution_of_Affected_Side_Stability_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600)
 
         plt.close()
 
-    def viz_comparison_boxplot(self, finger_df: pd.DataFrame, finger_order: list[str]) -> None:
+    def viz_comparison_boxplot(self, segment_df: pd.DataFrame, segment_order: list[str],
+                               segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+        """
+        Generates and saves a 4-way grouped boxplot comparing the temporal consistency (CoV)
+        across Active/Passive roles and Healthy/Affected conditions.
+
+        Args:
+            segment_df (pd.DataFrame): DataFrame containing CoV, State, and segment data.
+            segment_order (list[str]): Ordered list of segments to plot on the x-axis.
+            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+            body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
+
+        Returns:
+            None
+        """
 
         plt.figure(figsize=(12, 6))
 
@@ -181,47 +224,60 @@ class Visualizer:
         # order of the legend and bars
         hue_order = ['Healthy (Active)', 'Healthy (Passive)', 'Affected (Active)', 'Affected (Passive)']
 
-        sns.boxplot(data=finger_df,
-                    x='Finger',
+        sns.boxplot(data=segment_df,
+                    x=segment_col,
                     y='CoV',
                     hue='State',
                     palette=custom_palette,
                     hue_order=hue_order,
-                    order=finger_order)
+                    order=segment_order)
 
-        plt.title('Temporal Consistency: Active vs. Passive Hand', fontsize=14)
+        plt.title(f'Temporal Consistency: Active vs. Passive {body_part}', fontsize=14)
         plt.ylabel('Mean CoV (%)', fontsize=12)
-        plt.xlabel('Finger', fontsize=12)
+        plt.xlabel(segment_col.replace('_', ' '), fontsize=12)
 
         # legend placed outside the plot to prevent it from covering data
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title='Hand State')
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title=f'{body_part} State')
 
         plt.yticks(np.arange(0, 100 + 10, 10))
 
         plt.tight_layout()
 
         suffix = '.png'
-        f_name: str = '4-Way_Consistency_Boxplot' + suffix
+        f_name: str = f'4-Way_Consistency_Boxplot_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600)
 
         plt.close()
 
-    def viz_normality_qq_plots(self, paired_df: pd.DataFrame, finger_order: list[str]) -> None:
+    def viz_normality_qq_plots(self, paired_df: pd.DataFrame, segment_order: list[str],
+                               segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+        """
+        Generates and saves a grid of Q-Q plots to visually assess the normality of paired
+        differences (Healthy vs. Affected) for each body segment, including the Shapiro-Wilk p-value.
 
+        Args:
+            paired_df (pd.DataFrame): DataFrame containing paired CoV data for Healthy and Affected conditions.
+            segment_order (list[str]): Ordered list of segments to generate subplots for.
+            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+            body_part (str, optional): Name of the body part being analyzed, used for filenames. Defaults to 'Hand'.
+
+        Returns:
+            None
+        """
         # create a 3x2 grid
         fig, axes = plt.subplots(3, 2, figsize=(10, 15))
 
         # flatten the 2D array so we can use a single index 'i'
         axes_flat = axes.flatten()
 
-        for i, finger in enumerate(finger_order):
+        for i, segment in enumerate(segment_order):
             # select the specific subplot for this finger
             ax = axes_flat[i]
 
-            finger_data = paired_df[paired_df['Finger'] == finger]
-            differences = (finger_data['Healthy'] - finger_data['Affected']).dropna()
+            segment_data = paired_df[paired_df[segment_col] == segment]
+            differences = (segment_data['Healthy'] - segment_data['Affected']).dropna()
             print(f'N: {len(differences)}')
             if len(differences) >= 3:
                 _, p_val = stats.shapiro(differences)
@@ -231,35 +287,41 @@ class Visualizer:
                 norm_text = "N too small"
                 ax.text(0.5, 0.5, 'Insufficient Data', ha='center')
 
-            ax.set_title(f'Q-Q Plot: {finger}\n{norm_text}')
+            ax.set_title(f'Q-Q Plot: {segment}\n{norm_text}')
 
             # formatting for a 2-column layout
             ax.set_ylabel('Sample Quantiles' if i % 2 == 0 else '')
             ax.set_xlabel('Theoretical Quantiles')
 
         # hide the 6th empty subplot
-        if len(finger_order) < len(axes_flat):
+        if len(segment_order) < len(axes_flat):
             axes_flat[-1].axis('off')
 
         plt.tight_layout()
 
         suffix = '.png'
-        f_name: str = 'QQ_Plots' + suffix
+        f_name: str = f'QQ_Plots_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600)
 
         plt.close()
 
-    def viz_lmm_interaction_trajectories(self, finger_df: pd.DataFrame) -> None:
+    def viz_lmm_interaction_trajectories(self, segment_df: pd.DataFrame, body_part: str = 'Hand') -> None:
         """
-        Creates a 'Spaghetti Plot' showing individual participant trajectories
-        from Passive to Active states, split by Healthy vs. Affected hands,
-        overlaid with the group mean to visualize the LMM interaction effect.
-        """
+        Creates and saves an interaction trajectory showing individual participant trajectories
+        from Passive to Active states, split by Healthy vs. Affected conditions, overlaid
+        with the group mean to visualize the LMM interaction effect.
 
+        Args:
+            segment_df (pd.DataFrame): DataFrame containing CoV, Participant, condition, and role data.
+            body_part (str, optional): Name of the body part being analyzed, used for labels and filenames. Defaults to 'Hand'.
+
+        Returns:
+            None
+        """
         # aggregate the data: get the mean CoV per participant for each state (ignoring specific fingers)
-        agg_df = finger_df.groupby(['Participant', 'Hand_Condition', 'Hand_Role'])['CoV'].mean().reset_index()
+        agg_df = segment_df.groupby(['Participant', 'Hand_Condition', 'Hand_Role'])['CoV'].mean().reset_index()
 
         # treat 'Participant' as categorical variable
         agg_df['Participant'] = agg_df['Participant'].astype(str)
@@ -285,8 +347,8 @@ class Visualizer:
                          linewidth=3, marker="D", markersize=8, zorder=10, legend=False, ax=ax)
 
         # formatting
-        face_grid.set_axis_labels('Hand Role (State of Movement)', 'Mean CoV (%)', fontsize=12)
-        face_grid.set_titles(col_template="{col_name} Hand", size=14, weight='bold')
+        face_grid.set_axis_labels(f'Role (State of Movement)', 'Mean CoV (%)', fontsize=12)
+        face_grid.set_titles(col_template=f'{{col_name}} {body_part}', size=14, weight='bold')
 
         # adjust y-axis to start at 0
         face_grid.set(ylim=(0, None))
@@ -300,15 +362,26 @@ class Visualizer:
 
         # Save the plot
         suffix = '.png'
-        f_name: str = 'LMM_Interaction_Trajectories' + suffix
+        f_name: str = f'LMM_Interaction_Trajectories_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
 
         plt.close()
 
-    def viz_lmm_normality_and_homoscedasticity(self, model) -> None:
+    def viz_lmm_normality_and_homoscedasticity(self, model, body_part: str = 'Hand') -> None:
+        """
+        Generates and saves diagnostic plots (a Q-Q plot and a Tukey-Anscombe scatter plot)
+        to verify the normality of residuals and homoscedasticity assumptions of the
+        fitted Linear Mixed Model.
 
+        Args:
+            model: The fitted statsmodels Linear Mixed Model (LMM) object.
+            body_part (str, optional): Name of the body part being analyzed, used for filenames. Defaults to 'Hand'.
+
+        Returns:
+            None
+        """
         fig, ax = plt.subplots(1, 2, figsize=(14, 6))
 
         residuals = model.resid
@@ -331,7 +404,7 @@ class Visualizer:
 
         # Save the plot
         suffix = '.png'
-        f_name: str = 'LMM_Assumption_Tests' + suffix
+        f_name: str = f'LMM_Assumption_Tests_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')

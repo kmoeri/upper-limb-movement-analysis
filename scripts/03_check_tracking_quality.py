@@ -299,7 +299,102 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
     return pd.DataFrame(results_lst)
 
 
-def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
+def get_arm_segment_stability(p: Participant) -> pd.DataFrame:
+    """
+    Calculates segment lengths of the arms and calculates the Coefficient of Variance (CoV) for each body segment for
+    both the active and the passive arms.
+
+    Args:
+        p (Participant): list of participant objects of the class Participant.
+
+    Returns:
+        pd.dataframe: a dataframe containing the CoV of each body segment for both arms.
+    """
+
+    # configuration definitions
+    ul_seg_names_dict = {'1': 'Torso', '2': 'Upper_Arm', '3': 'Lower_Arm'}
+    link_lst: list[list[str]] = config['body_parts']['pose_link_lst']
+
+    # tracking consistency test using all participants and exercises
+    results_lst: list = []
+    tb: ToolBox = ToolBox()
+
+    # run for each exercise
+    for ex_key in p.exercises.keys():
+
+        # determine the active and passive side ('L' or 'R')
+        active_side: str = p.exercises[ex_key].side_focus
+        passive_side: str = 'R' if active_side == 'L' else 'L'
+
+        # map the active and passive sides to the affected and healthy sides by participant info
+        active_condition: str = 'Affected' if active_side == p.affected_side else 'Healthy'
+        passive_condition: str = 'Healthy' if active_side == p.affected_side else 'Affected'
+
+        # configuration for the roles of both arms for a given exercise
+        arm_roles = {
+            'Active': {
+                'side': active_side,
+                'condition': active_condition,
+                'link_idx': link_lst[:3] if active_side == 'L' else [link_lst[0]] + link_lst[3:]
+            },
+            'Passive': {
+                'side_lr': passive_side,
+                'condition': passive_condition,
+                'link_idx': link_lst[:3] if passive_side == 'L' else [link_lst[0]] + link_lst[3:]
+            }
+        }
+
+        # load the exercise values in a dataframe
+        exercise_dict = p.exercises[ex_key].clean_pose_landmarks
+        df_cols = {}
+
+        for label, axes in exercise_dict.items():
+            if label == 'frame':
+                continue
+            df_cols[f'{label}_x'] = axes[0]
+            df_cols[f'{label}_y'] = axes[1]
+            df_cols[f'{label}_z'] = axes[2]
+
+        exercise_df: pd.DataFrame = pd.DataFrame(df_cols)
+
+        for role, role_info in arm_roles.items():
+            curr_link_lst = role_info['link_idx']
+            condition = role_info['condition']
+
+            # calculate the length of each arm segment
+            segment_len_df: pd.DataFrame = tb.calculate_3d_segment_lengths(exercise_df, curr_link_lst)
+
+            # calculation of segment CoV (%)
+            body_segments_cov_series: pd.Series = ((segment_len_df.std() / segment_len_df.mean()) * 100)
+
+            # identify the segment by checking the connected string names
+            for segment_name, cov_value in body_segments_cov_series.items():
+                seg_str = str(segment_name).lower()
+                if 'shoulder' in seg_str and 'shoulder' in seg_str:
+                    ul_seg_name = 'Torso'
+                elif 'shoulder' in seg_str and 'elbow' in seg_str:
+                    ul_seg_name = 'Upper_Arm'
+                elif 'elbow' in seg_str and 'wrist' in seg_str:
+                    ul_seg_name = 'Lower_Arm'
+                else:
+                    ul_seg_name = 'Unknown'
+
+                results_lst.append({
+                    'Participant': p.pid,                   # e.g, P001
+                    'Trial': ex_key,                        # e.g., 'FingerTapping_Affected'
+                    'Active_Side': active_side,             # 'L' or 'R'
+                    'Passive_Side': passive_side,           # 'L' or 'R'
+                    'Hand_Role': role,                      # 'Active' or 'Passive'
+                    'Hand_Condition': condition,            # 'Affected' or 'Healthy'
+                    'Upper_Limb_Segment_Name': ul_seg_name, # 'Torso', 'Upper_Arm', 'Lower_Arm'
+                    'Segment': segment_name,                # e.g., 'shoulder1-elbow1'
+                    'CoV': round(cov_value, 3)
+                })
+
+    return pd.DataFrame(results_lst)
+
+
+def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str, body_part: str = "Hand"):
     """
     This function fits a Linear Mixed Model (LMM), performs model selection using a likelihood ratio test (LRT),
     calculates the ICC, and saves the results to a text and a csv file.
@@ -307,6 +402,7 @@ def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
     Args:
         hand_df (pd.DataFrame): Table containing the Participant, CoV, Hand_Condition, and Hand_Role
         results_dir (str): Directory where the results are saved.
+        body_part (str, optional): Body part name to add to filename. Defaults to 'Hand'.
 
     Returns:
         final_model: Linear Mixed Model fitted on the data (generated with statsmodels)
@@ -344,7 +440,7 @@ def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
         report_text += final_model.summary().as_text()
 
         # save full report in text file
-        txt_path = os.path.join(results_dir, 'lmm_temporal_consistency_stats_full.txt')
+        txt_path = os.path.join(results_dir, f'lmm_temporal_consistency_stats_{body_part}_full.txt')
         if not os.path.exists(txt_path):
             with open(txt_path, 'w') as f:
                 f.write(report_text)
@@ -401,7 +497,7 @@ def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
         stats_df: pd.DataFrame = final_model.summary().tables[1]
 
         # save results to csv
-        csv_path: str = os.path.join(results_dir, 'lmm_temporal_consistency_stats.csv')
+        csv_path: str = os.path.join(results_dir, f'lmm_temporal_consistency_stats_{body_part}.csv')
         if not os.path.exists(csv_path):
             stats_df.to_csv(csv_path)
 
@@ -414,13 +510,24 @@ def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str):
 
 
 def run_temporal_consistency_check():
+    """
+    Main function that loads participant data, calculates segment stability (CoV)
+    for both hands and arms, performs statistical evaluations using Linear Mixed Models (LMM),
+    and generates all diagnostic and comparative visualizations.
 
+    Args:
+        None
+
+    Returns:
+        None
+    """
     # load participant objects
     participant_objs_path: str = os.path.join(project_path, 'data', '03_processed')
     participant_pickle_lst: list = [x for x in sorted(os.listdir(participant_objs_path))
                                     if x.startswith('P') and x.endswith('.pickle')]
 
-    all_cov_df_lst: list = []
+    all_hand_cov_df_lst: list = []
+    all_arm_cov_df_lst: list = []
 
     # run for each participant and each visit
     for pickle_file in participant_pickle_lst:
@@ -428,18 +535,24 @@ def run_temporal_consistency_check():
 
         # determine coefficients of variation for each hand segment
         hand_size_dict: dict = determine_best_hand_reference(p)
-        cov_res_df: pd.DataFrame = get_hand_segment_stability(p, hand_size_dict)
-        all_cov_df_lst.append(cov_res_df)
+        hand_cov_res_df: pd.DataFrame = get_hand_segment_stability(p, hand_size_dict)
+        all_hand_cov_df_lst.append(hand_cov_res_df)
+
+        # determine coefficients of variation for each hand segment
+        arm_cov_res_df: pd.DataFrame = get_arm_segment_stability(p)
+        all_arm_cov_df_lst.append(arm_cov_res_df)
+
+    # HAND CONSISTENCY CHECK
 
     # combine all participants into one dataframe
-    full_cov_df: pd.DataFrame = pd.concat(all_cov_df_lst, ignore_index=True)
+    full_hand_cov_df: pd.DataFrame = pd.concat(all_hand_cov_df_lst, ignore_index=True)
 
     # order of fingers for plotting
     finger_order = ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']
 
     # get the average coefficients of variance of each finger grouping by condition and role
-    finger_df: pd.DataFrame = full_cov_df.groupby(['Participant', 'Trial', 'Hand_Condition', 'Hand_Role', 'Finger']
-                                                  )['CoV'].mean().reset_index()
+    finger_df: pd.DataFrame = full_hand_cov_df.groupby(['Participant', 'Trial', 'Hand_Condition',
+                                                        'Hand_Role', 'Finger'])['CoV'].mean().reset_index()
 
     # create combined 'State' column for the 4-way comparison
     finger_df['State'] = finger_df['Hand_Condition'] + " (" + finger_df['Hand_Role'] + ")"
@@ -452,39 +565,95 @@ def run_temporal_consistency_check():
     ).reset_index()
 
     # filter states for Raincloud plots
-    active_healthy_df = reformat_finger_df[(reformat_finger_df['Hand_Condition'] == 'Healthy') &
-                                           (reformat_finger_df['Hand_Role'] == 'Active')]
-    active_affected_df = reformat_finger_df[(reformat_finger_df['Hand_Condition'] == 'Affected') &
-                                            (reformat_finger_df['Hand_Role'] == 'Active')]
+    active_healthy_hand_df = reformat_finger_df[(reformat_finger_df['Hand_Condition'] == 'Healthy') &
+                                                (reformat_finger_df['Hand_Role'] == 'Active')]
+    active_affected_hand_df = reformat_finger_df[(reformat_finger_df['Hand_Condition'] == 'Affected') &
+                                                 (reformat_finger_df['Hand_Role'] == 'Active')]
 
     # create visualizer object
     vis_util: Visualizer = Visualizer()
 
     # plot raincloud (Active Healthy)
-    vis_util.vis_consistency_raincloud(link_df=active_healthy_df,
+    vis_util.vis_consistency_raincloud(link_df=active_healthy_hand_df,
                                        columns_to_plot=finger_order,
                                        title='Task Consistency of Healthy Hand (Active)',
                                        x_label='Finger',
                                        y_label='Mean CoV (%)')
 
     # plot raincloud (affected)
-    vis_util.vis_consistency_raincloud(link_df=active_affected_df,
+    vis_util.vis_consistency_raincloud(link_df=active_affected_hand_df,
                                        columns_to_plot=finger_order,
                                        title='Task Consistency of Affected Hand (Active)',
                                        x_label='Finger',
                                        y_label='Mean CoV (%)')
 
     # box plot comparison of all 4 states
-    vis_util.viz_comparison_boxplot(finger_df, finger_order)
+    vis_util.viz_comparison_boxplot(segment_df=finger_df, segment_order=finger_order, segment_col='Finger', body_part='Hand')
 
     # run the LMM statistical test
-    lmm_results = get_lmm_consistency_statistics(finger_df, vis_util.temp_consistency_res_path)
+    lmm_results_hands = get_lmm_consistency_statistics(finger_df, vis_util.temp_consistency_res_path, body_part='Hand')
 
     # generate the LLM's interaction trajectories
-    vis_util.viz_lmm_interaction_trajectories(finger_df)
+    vis_util.viz_lmm_interaction_trajectories(segment_df=finger_df, body_part='Hand')
 
     # generate Q-Q plot and Tukey-Anscombe (homoscedasticity) to test model assumptions
-    vis_util.viz_lmm_normality_and_homoscedasticity(lmm_results)
+    vis_util.viz_lmm_normality_and_homoscedasticity(model=lmm_results_hands, body_part='Hand')
+
+    # ARM CONSISTENCY CHECK
+
+    # combine all participants into one dataframe
+    full_arm_cov_df: pd.DataFrame = pd.concat(all_arm_cov_df_lst, ignore_index=True)
+
+    # order of upper limbs for plotting
+    ul_order = ['Torso', 'Upper_Arm', 'Lower_Arm']
+
+    # get the average coefficients of variance of each upper limb segment by condition and role
+    arm_df: pd.DataFrame = full_arm_cov_df.groupby(['Participant', 'Trial', 'Hand_Condition',
+                                                    'Hand_Role', 'Upper_Limb_Segment_Name'])['CoV'].mean().reset_index()
+
+    # create combined 'State' column for the 4-way comparison
+    arm_df['State'] = arm_df['Hand_Condition'] + " (" + arm_df['Hand_Role'] + ")"
+
+    # pivot DataFrame table to adjust parameters for raincloud plot
+    reformat_arm_df: pd.DataFrame = arm_df.pivot_table(
+        index=['Participant', 'Trial', 'Hand_Condition', 'Hand_Role'],
+        columns='Finger',
+        values='CoV'
+    ).reset_index()
+
+    # filter states for Raincloud plots
+    active_healthy_arm_df = reformat_arm_df[(reformat_arm_df['Hand_Condition'] == 'Healthy') &
+                                            (reformat_arm_df['Hand_Role'] == 'Active')]
+    active_affected_arm_df = reformat_arm_df[(reformat_arm_df['Hand_Condition'] == 'Affected') &
+                                             (reformat_arm_df['Hand_Role'] == 'Active')]
+
+    # plot raincloud (Active Healthy)
+    vis_util.vis_consistency_raincloud(link_df=active_healthy_arm_df,
+                                       columns_to_plot=ul_order,
+                                       title='Task Consistency of Healthy Arm (Active)',
+                                       x_label='Upper Limb Segment',
+                                       y_label='Mean CoV (%)')
+
+    # plot raincloud (affected)
+    vis_util.vis_consistency_raincloud(link_df=active_affected_arm_df,
+                                       columns_to_plot=ul_order,
+                                       title='Task Consistency of Affected Arm (Active)',
+                                       x_label='Upper Limb Segment',
+                                       y_label='Mean CoV (%)')
+
+    # box plot comparison of all 4 states
+    vis_util.viz_comparison_boxplot(segment_df=arm_df, segment_order=ul_order,
+                                    segment_col='Upper_Limb_Segment_Name', body_part='Arm')
+
+    # run the LMM statistical test
+    lmm_results_arms = get_lmm_consistency_statistics(arm_df, vis_util.temp_consistency_res_path, body_part='Arm')
+
+    if lmm_results_arms:
+        # generate the LLM's interaction trajectories
+        vis_util.viz_lmm_interaction_trajectories(segment_df=arm_df, body_part='Arm')
+
+        # generate Q-Q plot and Tukey-Anscombe (homoscedasticity) to test model assumptions
+        vis_util.viz_lmm_normality_and_homoscedasticity(model=lmm_results_arms, body_part='Arm')
 
 
 if __name__ == '__main__':
