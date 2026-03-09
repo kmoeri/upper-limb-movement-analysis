@@ -370,7 +370,9 @@ def get_arm_segment_stability(p: Participant) -> pd.DataFrame:
             # identify the segment by checking the connected string names
             for segment_name, cov_value in body_segments_cov_series.items():
                 seg_str = str(segment_name).lower()
-                if 'shoulder' in seg_str and 'shoulder' in seg_str:
+
+                # check if 'shoulder' appears twice (left and right)
+                if seg_str.count('shoulder') == 2:
                     ul_seg_name = 'Torso'
                 elif 'shoulder' in seg_str and 'elbow' in seg_str:
                     ul_seg_name = 'Upper_Arm'
@@ -617,7 +619,7 @@ def run_temporal_consistency_check():
     # pivot DataFrame table to adjust parameters for raincloud plot
     reformat_arm_df: pd.DataFrame = arm_df.pivot_table(
         index=['Participant', 'Trial', 'Hand_Condition', 'Hand_Role'],
-        columns='Finger',
+        columns='Upper_Limb_Segment_Name',
         values='CoV'
     ).reset_index()
 
