@@ -11,6 +11,7 @@ from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
 from scipy.signal import savgol_filter
+from scipy.signal import ShortTimeFFT
 from scipy.spatial.transform import Rotation
 
 # modules
@@ -311,6 +312,54 @@ class ToolBox:
             segment_len_dict[segment_name] = lengths
 
         return pd.DataFrame(segment_len_dict, index=landmarks_df.index)
+
+    def init_short_time_fft(self) -> ShortTimeFFT:
+
+        # configuration
+        fs = self.fps                                               # sampling rate [Hz]
+        nperseg = config['parameter_extraction']['nperseg']         # number of points per segment
+        noverlap = config['parameter_extraction']['noverlap']       # number of overlapping points
+        mfft = config['parameter_extraction']['mfft']               # number of FFT points
+        window = config['parameter_extraction']['window']           # window to smooth signal edges
+
+        # initialize object with configuration parameters
+        SFT = ShortTimeFFT.from_window(window, fs=fs, nperseg=nperseg, noverlap=noverlap, mfft=mfft,
+                                       fft_mode='onesided', scale_to='magnitude', phase_shift=None)
+
+        return SFT
+
+    def adaptive_stft_filter(self, signal: np.ndarray) -> np.ndarray:
+
+        # detrending the signal (remove spatial offset)
+        signal_det = signal - np.mean(signal)
+
+        # initialize the stft class object
+        SFT = self.init_short_time_fft()
+
+        # calculate the complex stft
+        Sx_complex = SFT.stft(signal_det)
+
+        # calculate the power from the complex numbers by squaring the magnitude
+        Sxx_power = np.abs(Sx_complex) ** 2
+
+        # upper and lower bound
+        upper_limit = np.percentile(Sxx_power, config['parameter_extraction']['vmax_percentile'])
+        n_order_mag: int = config['parameter_extraction']['vmin_factor']
+        lower_limit = upper_limit * pow(1e1, (-1)*n_order_mag)
+
+        # mask values above the noise floor (lower limit) as 'True' and the rest below as 'False'
+        spectral_mask = Sxx_power > lower_limit
+
+        # adaptive filtering by multiplication with the mask: noise (below lower_limit) becomes 0 + 0j
+        Sx_filtered_complex = Sx_complex * spectral_mask
+
+        # reconstruct the timeseries 'landmark_arr' using inverse stft
+        signal_filtered_detrended = SFT.istft(Sx_filtered_complex, k1=len(signal))  # k1: trims to signal length
+
+        # add the previously remove spatial mean -> move signal back to its previous spatial coordinate
+        signal_filtered_final = signal_filtered_detrended + np.mean(signal)
+
+        return signal_filtered_final
 
     def calculate_3d_hand_rotation(self, landmarks_dict: dict) -> np.ndarray:
 
