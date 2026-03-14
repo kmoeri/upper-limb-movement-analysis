@@ -3,190 +3,15 @@
 
 # libraries
 import os
-import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
 from scipy.stats import chi2
 
 # modules
 from src.config import config, project_path
-from src.core import Participant, Exercise
+from src.core import Participant
 from src.utils import ToolBox
 from src.visualization import Visualizer
-
-
-def determine_best_hand_reference(p: Participant) -> dict:
-    """
-    Calculates the median hand sizes of the left and the right hand sides across all exercises of the given participant
-    for a specific visit (e.g., T1 or T2).
-
-    Args:
-        p (Participant): participant object of the class Participant.
-
-    Returns:
-        best_hand_ref_dict (dict): dictionary holding the largest median hand size for the affected and healthy side
-    """
-
-    # load lists from config file
-    link_lst: list[list[str]] = config['body_parts']['hands_link_lst']
-    l_hand_size_link_lst: list[str] = config['body_parts']['hand_size_left']
-    r_hand_size_link_lst: list[str] = config['body_parts']['hand_size_right']
-
-    def get_med_hand_size(exercise: Exercise, target_side: str, hand_specific_link_lst: list[list[str]],
-                          hand_size_link_lst: list[str], occlusion_threshold: float = 0.85,
-                          framerate: float = 90.0) -> float:
-        """
-        Calculates the median hand size using the anatomical hand size (sum of wrist to middle finger knuckle
-        plus each middle finger segment) and the direct distance (wrist to middle fingertip) as a threshold measure.
-        This function is intended for single hand processing.
-
-        Args:
-            exercise (Exercise): Exercise object with tracked landmarks and exercise information.
-            target_side (str): Whether the active or passive hand is targeted ('L' or 'R').
-            hand_specific_link_lst (list): List of connected landmark pairs, e.g., [['wrist1', 'cmc11'], ...].
-            hand_size_link_lst (list): List of segments from wrist to middle fingertip, e.g., ['wrist1-mcp13', ...].
-            occlusion_threshold: Minimum acceptable ratio of straight-line hand size to segmented hand size.
-                                 (e.g., 0.7 means straight line must be at least 70% of the segmented length).
-            framerate (float): Number of frames per second of the underlying data.
-
-        Returns:
-            median_hand_size (float): The median size of the given hand.
-        """
-
-        # length of each hand segment
-        tb: ToolBox = ToolBox()
-        exercise_dict: dict = exercise.clean_hand_landmarks
-
-        df_cols = {}
-        for label, axes in exercise_dict.items():
-            if label == 'frame':                    # do not extract the column named 'frame' (usually first)
-                continue
-            df_cols[f'{label}_x'] = axes[0]
-            df_cols[f'{label}_y'] = axes[1]
-            df_cols[f'{label}_z'] = axes[2]
-
-        exercise_df: pd.DataFrame = pd.DataFrame(df_cols)
-        segment_len_df: pd.DataFrame = tb.calculate_3d_segment_lengths(exercise_df, hand_specific_link_lst)
-
-        # calculate the hand size
-        try:
-            # get handedness: index 1 -> left hand, index 2 -> right hand. First column is 'wrist1' or 'wrist2'
-            side: int = 1 if target_side == 'L' else 2
-
-            # drop rows where any of the segments to calculate the hand size are missing (NaN)
-            clean_segment_len: pd.DataFrame = segment_len_df.dropna(subset=hand_size_link_lst)
-
-            # distance from wrist to fingertip by the sum of each segment inbetween
-            hand_size_segment_len: pd.Series = clean_segment_len[hand_size_link_lst].sum(axis=1)
-
-            # distance from wrist to fingertip by direct connection
-            wrist_middle_finger_dist = tb.calculate_3d_segment_lengths(exercise_df.loc[clean_segment_len.index],
-                                                                       [[f'wrist{side}', f'ftip{side}3']])
-        except KeyError as e:
-            print(
-                f"Error: Could not calculate hand size. Missing one or more required middle finger segment columns: {e}")
-            del tb
-            return 0.0
-
-        # direct wrist to middle fingertip distance
-        hand_size_direct_len: pd.Series = wrist_middle_finger_dist[f'wrist{side}-ftip{side}3']
-
-        # occlusion filter: hand size segment lengths of flexed hands, i.e., fists should not be included
-        diff_dist_series: pd.Series = hand_size_segment_len - hand_size_direct_len
-        if (diff_dist_series.values < 0).any():
-            print('Warning: tracking detected abnormal values for hand size calculation. '
-                  'Direct wrist-ftip distance was larger than sum of segments.')
-
-        # occlusion metric
-        occlusion_ratio = hand_size_direct_len / hand_size_segment_len
-        filt_mask_lst = occlusion_ratio > occlusion_threshold
-
-        # find at least a sum of frames equal or larger than 1s of 'flat' hand positions (e.g., 90 fps -> 90 frames)
-        if sum(filt_mask_lst) < int(framerate):
-            print(f'Warning: current exercise was skipped for median hand size calculation.'
-                  f'Not enough flat hand positions found (found: {sum(filt_mask_lst)}).')
-            del tb
-            return 0.0
-
-        # get the median hand size of the 'flat' hand positions
-        median_hand_size: float = np.median(hand_size_segment_len[filt_mask_lst].tolist())
-
-        del tb
-        return median_hand_size
-
-    # variables for results
-    best_hand_ref_dict: dict = dict()
-    med_results = {'L': [], 'R': []}
-
-    # run for each exercise
-    for ex_key in p.exercises.keys():
-
-        # extract side of focus
-        hand_of_focus: str = p.exercises[ex_key].side_focus
-
-        # determine the links based on the side of focus ('L' or 'R')
-        if hand_of_focus == 'L':
-            passive_hand = 'R'
-            active_hand_link_lst: list = link_lst[:len(link_lst)//2]
-            passive_hand_link_lst: list = link_lst[len(link_lst)//2:]
-            active_hand_size_link_lst: list = l_hand_size_link_lst
-            passive_hand_size_link_lst: list = r_hand_size_link_lst
-
-        else:
-            passive_hand = 'L'
-            active_hand_link_lst: list = link_lst[len(link_lst)//2:]
-            passive_hand_link_lst: list = link_lst[:len(link_lst)//2]
-            active_hand_size_link_lst: list = r_hand_size_link_lst
-            passive_hand_size_link_lst: list = l_hand_size_link_lst
-
-        # relax the threshold for more severe spasticity affecting the hand
-        thresh_lst = config['tracking_consistency']['thresh_lst']
-        active_med_hand_size: float = 0.0
-        passive_med_hand_size: float = 0.0
-
-        # calculate median hand sizes for different hand aperture threshold until return variable is > 0.0
-        # active side
-        for thresh in thresh_lst:
-            active_med_hand_size = get_med_hand_size(p.exercises[ex_key],
-                                                     target_side=hand_of_focus,
-                                                     hand_specific_link_lst=active_hand_link_lst,
-                                                     hand_size_link_lst=active_hand_size_link_lst,
-                                                     occlusion_threshold=thresh,
-                                                     framerate=config['camera_param']['fps'])
-
-            if active_med_hand_size > 0.0:
-                break
-
-        # passive side
-        for thresh in thresh_lst:
-            passive_med_hand_size = get_med_hand_size(p.exercises[ex_key],
-                                                      target_side=passive_hand,
-                                                      hand_specific_link_lst=passive_hand_link_lst,
-                                                      hand_size_link_lst=passive_hand_size_link_lst,
-                                                      occlusion_threshold=thresh,
-                                                      framerate=config['camera_param']['fps'])
-
-            if passive_med_hand_size > 0.0:
-                break
-
-            if active_med_hand_size == 0.0 or passive_med_hand_size == 0.0:
-                print(f'Warning: Exercise "{ex_key}" of participant {p.pid} for visit {p.visit_id} yielded no median for either hand size.')
-
-        med_results[hand_of_focus].append(active_med_hand_size)
-        med_results[passive_hand].append(passive_med_hand_size)
-
-    # select the largest median hand size
-    max_left_hand_size: float = max(med_results['L']) if med_results['L'] else 0.0
-    max_right_hand_size: float = max(med_results['R']) if med_results['R'] else 0.0
-
-    # add the selected hand size to the dictionary
-    if p.affected_side == 'L':
-        best_hand_ref_dict[p.pid] = {'Affected': max_left_hand_size, 'Healthy': max_right_hand_size}
-
-    elif p.affected_side == 'R':
-        best_hand_ref_dict[p.pid] = {'Affected': max_right_hand_size, 'Healthy': max_left_hand_size}
-
-    return best_hand_ref_dict
 
 
 def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.DataFrame:
@@ -531,12 +356,15 @@ def run_temporal_consistency_check():
     all_hand_cov_df_lst: list = []
     all_arm_cov_df_lst: list = []
 
+    # init ToolBox objects
+    tb = ToolBox()
+
     # run for each participant and each visit
     for pickle_file in participant_pickle_lst:
         p: Participant = Participant.load(os.path.join(participant_objs_path, pickle_file))
 
         # determine coefficients of variation for each hand segment
-        hand_size_dict: dict = determine_best_hand_reference(p)
+        hand_size_dict: dict = tb.determine_best_hand_reference(p)
         hand_cov_res_df: pd.DataFrame = get_hand_segment_stability(p, hand_size_dict)
         all_hand_cov_df_lst.append(hand_cov_res_df)
 

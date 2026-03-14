@@ -166,7 +166,7 @@ def load_participants(csv_file_paths: list) -> None:
     # create ToolBox object for utility function calling
     tb: ToolBox = ToolBox()
 
-    # loop through all csv files
+    # loop through all csv files and add all exercises to the corresponding Participant
     for csv_file_path in csv_file_paths:
 
         # 1) parse file name
@@ -226,7 +226,26 @@ def load_participants(csv_file_paths: list) -> None:
         # add exercise object to participant
         all_participants[session_key].add_exercise(ex)
 
-    # 8) save participant objects
+    # calculate the reference hand size for each participant, add it to each exercise, and save the participant objects
     for p in all_participants.values():
+
+        # 1) calculate the global hand sizes (left and right) for the current Participant
+        best_hand_ref_dict = tb.determine_best_hand_reference(p)    # Returns: {p.pid: {'Affected': X, 'Healthy': Y}}
+        participant_refs = best_hand_ref_dict.get(p.pid, {})
+
+        # 2) map the 'Affected' and 'Healthy' keys back to Left/Right
+        if p.affected_side == 'L':
+            left_size = participant_refs.get('Affected', 0.0)
+            right_size = participant_refs.get('Healthy', 0.0)
+        else:
+            left_size = participant_refs.get('Healthy', 0.0)
+            right_size = participant_refs.get('Affected', 0.0)
+
+        # 3) add the calculated sizes to every exercise of the current Participant
+        for ex_key, ex in p.exercises.items():
+            ex.left_hand_size = left_size
+            ex.right_hand_size = right_size
+
+        # 4) Save the current participant object
         p.save(f'{project_path}/data/03_processed')
 
