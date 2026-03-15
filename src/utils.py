@@ -549,6 +549,48 @@ class ToolBox:
 
         return euclidean_dist
 
+    @staticmethod
+    def get_descriptive_stats(data: np.ndarray, prefix: str = ''):
+        """
+        Calculates descriptive statistics - normal version (mean, standard deviation, min, max).
+
+        Args:
+            data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
+            prefix (str, optional): The prefix used to name the metric. Defaults to ''.
+
+        Returns:
+            dict: Dictionary with descriptive statistics.
+        """
+
+        if len(data) == 0:
+            return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0, f'{prefix}_min': 0.0, f'{prefix}_max': 0.0}
+        return {
+            f'{prefix}_mean': round(float(np.mean(data)), 3),
+            f'{prefix}_std': round(float(np.std(data)), 3),
+            f'{prefix}_min': round(float(np.min(data)), 3),
+            f'{prefix}_max': round(float(np.max(data)), 3)
+        }
+
+    @staticmethod
+    def get_descriptive_stats_short(data: np.ndarray, prefix: str = ''):
+        """
+        Calculates descriptive statistics - short version (mean and standard deviation).
+
+        Args:
+            data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
+            prefix (str, optional): The prefix used to name the metric. Defaults to ''.
+
+        Returns:
+            dict: Dictionary with descriptive statistics.
+        """
+
+        if len(data) == 0:
+            return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0}
+        return {
+            f'{prefix}_mean': round(float(np.mean(data)), 3),
+            f'{prefix}_std': round(float(np.std(data)), 3),
+        }
+
     def calculate_3d_hand_rotation(self, landmarks_dict: dict) -> np.ndarray:
 
         def _get_wrist_coordinate_system(landmarks_dict: dict) -> tuple:
@@ -647,48 +689,6 @@ def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
             return 'Right'
 
     return None
-
-
-def get_descriptive_stats(data: np.ndarray, prefix: str = ''):
-    """
-    Calculates descriptive statistics - normal version (mean, standard deviation, min, max).
-
-    Args:
-        data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
-        prefix (str, optional): The prefix used to name the metric. Defaults to ''.
-
-    Returns:
-        dict: Dictionary with descriptive statistics.
-    """
-
-    if len(data) == 0:
-        return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0, f'{prefix}_min': 0.0, f'{prefix}_max': 0.0}
-    return {
-        f'{prefix}_mean': round(float(np.mean(data)), 3),
-        f'{prefix}_std': round(float(np.std(data)), 3),
-        f'{prefix}_min': round(float(np.min(data)), 3),
-        f'{prefix}_max': round(float(np.max(data)), 3)
-    }
-
-
-def get_descriptive_stats_short(data: np.ndarray, prefix: str = ''):
-    """
-    Calculates descriptive statistics - short version (mean and standard deviation).
-
-    Args:
-        data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
-        prefix (str, optional): The prefix used to name the metric. Defaults to ''.
-
-    Returns:
-        dict: Dictionary with descriptive statistics.
-    """
-
-    if len(data) == 0:
-        return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0}
-    return {
-        f'{prefix}_mean': round(float(np.mean(data)), 3),
-        f'{prefix}_std': round(float(np.std(data)), 3),
-    }
 
 
 def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], conf_dict: dict,
