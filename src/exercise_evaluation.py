@@ -24,8 +24,8 @@ class ExerciseEvaluator:
                                'max_valley_amp_diff': None, 'prominence_factor': 0.35,
                                'distance_factor': 0.35}
 
-    def _extract_base_kinematics(self, landmark_data: dict, ref_hand_size: float,
-                                 ref_landmark_name: str, target_landmark_names: list) -> dict:
+    def _extract_distance_based_kinematics(self, landmark_data: dict, ref_hand_size: float,
+                                           ref_landmark_name: str, target_landmark_names: list) -> dict:
         """
         Helper function to calculate normalized Euclidean distance and extract kinematic
         peaks for arbitrary combination of reference landmark and target landmarks combinations.
@@ -74,8 +74,8 @@ class ExerciseEvaluator:
         pair_key: str = f'{anchor}-{target}'
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_base_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                               anchor, [target])
+        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
+                                                                         anchor, [target])
 
         # 1.2) correctness of the tapping (spatial accuracy)
         valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valley_idx']
@@ -116,8 +116,8 @@ class ExerciseEvaluator:
         passive_fingers: list = lm_corr_names[2:]
 
         # calculate Euclidean distance for passive fingers
-        passive_kinematics: dict = self._extract_base_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                                 wrist_name, passive_fingers)
+        passive_kinematics: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
+                                                                           wrist_name, passive_fingers)
 
         # calculate the isolation variances
         isolation_variances: list = []
@@ -156,8 +156,8 @@ class ExerciseEvaluator:
         pair_key: str = f'{thumb}-{finger_names}'
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_base_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                               thumb, finger_names)
+        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
+                                                                         thumb, finger_names)
 
         # 1.2) correctness of the tapping order (extract tapping sequence and score with Levenshtein Distance)
 
@@ -288,8 +288,8 @@ class ExerciseEvaluator:
         finger_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names[1:]]
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_base_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                               wrist_name, finger_names)
+        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
+                                                                         wrist_name, finger_names)
 
         # 1.2) correctness of the closing (completeness of movement)
 
@@ -356,6 +356,58 @@ class ExerciseEvaluator:
     def analyze_pronation_supination(self, exercise: Exercise):
 
         # 1) extract the exercise-specific metric
+
+        # get current active side
+        active_side_idx = 1 if exercise.side_focus == 'L' else 2
+
+        # modify landmark names to hold the side information (left: 1, right: 2)
+        lm_base_names = config['pro_sup']['landmark_names']
+        wrist_name: str = f'{lm_base_names[0]}{active_side_idx}'
+        knuckle_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names[1:]]
+        ref_landmark_names: list = [wrist_name] + knuckle_names
+
+        # calculate the rotational angles of the current wrist
+        landmark_data: dict = exercise.clean_hand_landmarks
+        euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(landmark_data, ref_landmark_names)
+
+        # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
+        feature_dict = self.kf.calc_kinematic_parameters(euler_y, self.peak_cfg)
+
+        # 1.2) correctness of the rotation (completeness of movement)
+
+        # get all peak and valley amplitudes
+        peaks = feature_dict['valid_peaks_idx']
+        valleys = feature_dict['valid_valleys_idx']
+
+        # get peak and valley values of the pronation-supination movement
+        pro_valley_vals = euler_y[valleys]
+        sup_peak_vals = euler_y[peaks]
+
+        # get config thresholds for valid opening and closing
+        pronation_thresh: float = config['pro_sup'].get('pronation_rom', 75.0)
+        supination_thresh: float = config['pro_sup'].get('supination_rom', 80.0)
+
+        # calculate pronation and supination scores
+        pronation_score = (np.sum(np.abs(pro_valley_vals) > pronation_thresh) / len(pro_valley_vals) * 100) if len(pro_valley_vals) > 0 else 0.0
+        supination_score = (np.sum(sup_peak_vals > supination_thresh) / len(sup_peak_vals) * 100) if len(sup_peak_vals) > 0 else 0.0
+
+        # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
+
+        # 1.3.1) calculate the tapping rhythm with CoV
+        if len(valleys) > 1:
+            rotation_diff: np.ndarray = np.diff(valleys)
+            rotation_mean: float = float(np.mean(rotation_diff))
+            rotation_std: float = float(np.std(rotation_diff))
+            rotation_cov: float = float((rotation_std / rotation_mean) * 100) if rotation_mean > 0 else 0.0
+        else:
+            rotation_cov: float = 0.0
+
+        # 1.3.2) calculate the rotation stability - the larger the values of the other euler angles, the lower the score
+        x_stability_score: float = float(np.std(euler_x))
+        z_stability_score: float = float(np.std(euler_z))
+
+        # the total out-of-plane compensation movement during the pronation-supination exercise
+        total_comp_movement: float = x_stability_score + z_stability_score
 
         # 2) extract general metrics (e.g., task impairment by spectrogram)
 
