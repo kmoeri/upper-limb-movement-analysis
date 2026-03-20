@@ -201,7 +201,7 @@ class KinematicFeatures:
             cfg.update(custom_cfg)
 
         features = {
-            'repetition_freq': 0.0, 'num_repetitions': 0.0,
+            'repetition_freq': 0.0, 'repetition_num': 0.0,
             'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
             'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
             'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
@@ -367,7 +367,7 @@ class KinematicFeatures:
         if avg_period > 0:
             features['repetition_freq'] = round(1.0 / avg_period, 2)
             valid_duration = (peak_indices[-1] - peak_indices[0]) / self.fps
-            features['num_repetitions'] = round(valid_duration * features['repetition_freq'] + 1, 1)
+            features['repetition_num'] = round(valid_duration * features['repetition_freq'] + 1, 1)
 
         # amplitude (peak-to-peak)
         amplitudes = []

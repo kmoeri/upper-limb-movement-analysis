@@ -723,130 +723,44 @@ def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
     return None
 
 
-def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], conf_dict: dict,
-                               out_dir: str, overwrite: bool = False) -> None:
+def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) -> None:
     """
-    Saves extracted movement parameters by updating a csv main file with features from a specific trial run.
-    Each time this function is called, it adds new information to the csv main file. Content that already exists
-    can be overwritten by setting the 'overwrite' parameter to 'True'.
+    Saves extracted movement parameters to a csv file with features from all exercises.
+    Relies on Pandas dynamic DataFrame creation to handle varying exercise columns.
 
     Args:
         feature_list_of_dicts: List of dicts containing features from a specific trial.
-        conf_dict: Dictionary containing configuration information.
         out_dir: Directory where 'extracted_movement_features.csv' is stored.
-        overwrite: If 'True', overwrites existing data for the matching IDs. If 'False', only updates empty rows
 
     Returns:
         None
     """
 
-    # csv main file
-    out_path = os.path.join(out_dir, 'extracted_movement_features.csv')
-
-    n_participants: int = conf_dict['participant_info']['n_participants']   # 20
-    n_trials: int = conf_dict['participant_info']['n_trials']               # 10
-    age: list[list] = conf_dict['participant_info']['age']
-
-    info_col_names: list[str] = ['p_ID', 't_ID', 'f_exists', 'cam_ID', 'f_path', 'side']
-    params_col_names: list[str] = ['repetition_freq', 'num_repetitions',
-                                   'period_mean', 'period_std', 'period_min', 'period_max',
-                                   'amplitude_mean', 'amplitude_std', 'amplitude_min', 'amplitude_max',
-                                   'velocity_pos_mean', 'velocity_pos_std', 'velocity_neg_mean', 'velocity_neg_std']
-
-    all_col_names: list[str] = info_col_names + params_col_names
-
-    # load csv main file - load with str dtype to maintain leading zeros
-    if os.path.exists(out_path):
-        main_df = pd.read_csv(out_path, dtype={'t_ID': str, 'p_ID': str})
-
-    # create a new main dataframe
-    else:
-        # create rows for participant ID (participant * number_of_trials)
-        unique_p_ID_lst: list[str] = ['P{:03d}'.format(i) for i in range(1, n_participants + 1)]
-        final_p_ID_arr: np.ndarray = np.array([x for x in unique_p_ID_lst for _ in range(n_trials)])
-
-        # create rows for trial ID (trials 01 - 10)
-        final_t_ID_arr: np.ndarray = np.array(['{:02d}'.format(i) for i in range(1, n_trials + 1)] * n_participants)
-
-        # create a template dataframe with all possible participant trial combinations
-        main_df: pd.DataFrame = pd.DataFrame({'p_ID': final_p_ID_arr, 't_ID': final_t_ID_arr})
-
-        # initialize all columns with np.nan
-        for col in all_col_names:
-            if col not in main_df.columns:
-                main_df[col] = np.nan
-
-        # flag handling overwrites
-        main_df['f_exists'] = 'no'
-
-    # This allows them to hold both np.nan AND strings without generating a warning.
-    for col in info_col_names:
-        if col in main_df.columns:
-            main_df[col] = main_df[col].astype(object)
-
-    # main_df is indexed by IDs for updating functionality
-    main_df.set_index(['p_ID', 't_ID'], inplace=True)
-
-    # handle empty list
     if not feature_list_of_dicts:
-        print("No features provided in input list. Skipping update.")
+        print('No features provided. Skipping.')
         return
 
-    # load passed list of dicts as dataframe
-    new_param_df = pd.DataFrame(feature_list_of_dicts)
+    # csv main file
+    out_path: str = os.path.join(out_dir, 'extracted_movement_features.csv')
 
-    # extract participant IDs and trial IDs from filenames
-    new_param_df['fname'] = new_param_df['f_path'].apply(os.path.basename)
+    # load metric data into a dataframe
+    data_df: pd.DataFrame = pd.DataFrame(feature_list_of_dicts)
 
-    # use regex to identify the respective pattern (p_ID: P and 3 digits)
-    new_param_df['p_ID'] = new_param_df['fname'].str.extract(r'(P\d{3})')
+    # if the file already exists load and update the file
+    if os.path.exists(out_path):
+        main_df: pd.DataFrame = pd.read_csv(out_path)
 
-    # use regex to identify the respective pattern (t_ID: WT and 2 digits following a hyphen)
-    new_param_df['t_ID'] = new_param_df['fname'].str.extract(r'WT-(\d{2})')
-
-    # use regex to identify the respective pattern (cam_ID: 'cam' followed by one capital letter)
-    new_param_df['cam_ID'] = new_param_df['fname'].str.extract(r'(cam[A-Z])')
-
-    # even trial ids indicate exercises performed with the healthy side; odd: affected side
-    new_param_df['side'] = new_param_df['t_ID'].astype(int).apply(lambda x: 'healthy' if x % 2 == 0 else 'affected')
-
-    # update file status
-    new_param_df['f_exists'] = 'yes'
-
-    # filter matching columns between the new parameter dataframe and the main dataframe
-    cols_to_use = [col for col in all_col_names if col in new_param_df.columns]
-    new_param_df = new_param_df[cols_to_use]
-
-    # index the new dataframe to match the main dataframe
-    new_param_df.set_index(['p_ID', 't_ID'], inplace=True)
-
-    # incoming values replace existing data in csv main file
-    if overwrite:
-        main_df.update(new_param_df)
-
-    # only update rows with missing data
+        combined_df: pd.DataFrame = pd.concat([data_df, main_df]).drop_duplicates(
+            subset=['p_ID', 'visit_ID', 'ex_name', 'side_focus'],
+            keep='first',   # keeps the new calculated data
+        )
     else:
-        # filter main dataframe for empty rows
-        rows_to_update = main_df.index[main_df['f_exists'] == 'no']
+        combined_df: pd.DataFrame = data_df
 
-        # filter new params dataframe for empty rows
-        safe_new_params = new_param_df.loc[new_param_df.index.intersection(rows_to_update)]
+    # sort table
+    combined_df.sort_values(by=['p_ID', 'visit_ID', 'ex_name'], inplace=True)
 
-        # notify in case new parameters were skipped due to overwrite prevention
-        if len(safe_new_params) < len(new_param_df):
-            skipped = len(new_param_df) - len(safe_new_params)
-            print(f"Skipped {skipped} rows because data already existed there.")
-
-        # update the main dataframe with new, non-existing data
-        main_df.update(safe_new_params)
-
-    # reset index to make p_ID and t_ID normal columns again
-    main_df.reset_index(inplace=True)
-
-    # reorder columns
-    main_df = main_df[all_col_names]
-
-    # create the path (if not existing) and save the csv file (overwrites if existing)
+    # save table
     os.makedirs(out_dir, exist_ok=True)
-    main_df.to_csv(out_path, index=False)
-    print("csv main file successfully updated.")
+    combined_df.to_csv(out_path, index=False)
+    print(f'Successfully saved {len(combined_df)} trial records of extracted movement parameters to {out_path}')

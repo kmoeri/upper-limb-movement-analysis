@@ -78,7 +78,7 @@ class ExerciseEvaluator:
                                                                          anchor, [target])
 
         # 1.2) correctness of the tapping (spatial accuracy)
-        valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valley_idx']
+        valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valleys_idx']
         norm_dist_arr: np.ndarray = active_dist_dict[pair_key]['features']['normalized_distance']
 
         if len(valid_valley_idc) > 0:
@@ -109,6 +109,8 @@ class ExerciseEvaluator:
             half_window: int = max(int(tapping_mean / 6.0), 2)
         else:
             tapping_mean: float = 0.0
+            tapping_std: float = 0.0
+            tapping_cov: float = 0.0
             half_window: int = int(self.fps * 0.05)
 
         # 1.3.2) calculate the tapping isolation
@@ -137,7 +139,38 @@ class ExerciseEvaluator:
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
-        pass
+        # 5) Create result dictionary
+
+        # flatten the performance metrics of the active finger
+        performance_features = active_dist_dict[pair_key]['features']
+
+        # add exercise specific prefix-key 'idx_tap'
+        results = {
+            # general kinematic features
+            'idx_tap_rep_num': performance_features.get('repetition_num', 0.0),
+            'idx_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
+            'idx_tap_amp_mean': performance_features.get('amplitude_mean', 0.0),
+            'idx_tap_amp_pct_90': performance_features.get('amplitude_pct_90', 0.0),
+            'idx_tap_amp_cov': performance_features.get('amplitude_cov', 0.0),
+            'idx_tap_period_mean': performance_features.get('period_mean', 0.0),
+            'idx_tap_period_pct_90': performance_features.get('period_pct_90', 0.0),
+            'idx_tap_period_cov': performance_features.get('period_cov', 0.0),
+            'idx_tap_vel_pos_mean': performance_features.get('velocity_pos_mean', 0.0),
+            'idx_tap_vel_pos_pct_90': performance_features.get('velocity_pos_pct_90', 0.0),
+            'idx_tap_vel_pos_cov': performance_features.get('velocity_pos_cov', 0.0),
+            'idx_tap_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
+            'idx_tap_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
+            'idx_tap_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            # correctness of the tapping (spatial accuracy)
+            'idx_tap_accuracy': accuracy_percentage,
+            'idx_tap_target_error': mean_target_error,
+            # rhythm with CoV (period time between taps)
+            'idx_tap_cov': tapping_cov,
+            # isolation (variance of other fingers)
+            'idx_tap_isolation': isolation_score,
+        }
+
+        return results
 
     def analyze_finger_alternation(self, exercise: Exercise):
 
@@ -271,7 +304,38 @@ class ExerciseEvaluator:
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
-        pass
+        # 5) Create result dictionary
+
+        # flatten the performance metrics of the active finger
+        performance_features = active_dist_dict[f'{thumb}-{finger_names[0]}']['features']
+
+        # add exercise specific prefix-key 'alt_tap'
+        results = {
+            # general kinematic features
+            'alt_tap_rep_num': performance_features.get('repetition_num', 0.0),
+            'alt_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
+            'alt_tap_amp_mean': performance_features.get('amplitude_mean', 0.0),
+            'alt_tap_amp_pct_90': performance_features.get('amplitude_pct_90', 0.0),
+            'alt_tap_amp_cov': performance_features.get('amplitude_cov', 0.0),
+            'alt_tap_period_mean': performance_features.get('period_mean', 0.0),
+            'alt_tap_period_pct_90': performance_features.get('period_pct_90', 0.0),
+            'alt_tap_period_cov': performance_features.get('period_cov', 0.0),
+            'alt_tap_vel_pos_mean': performance_features.get('velocity_pos_mean', 0.0),
+            'alt_tap_vel_pos_pct_90': performance_features.get('velocity_pos_pct_90', 0.0),
+            'alt_tap_vel_pos_cov': performance_features.get('velocity_pos_cov', 0.0),
+            'alt_tap_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
+            'alt_tap_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
+            'alt_tap_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            # correctness of the tapping sequence (tapping order)
+            'alt_tap_accuracy': tapping_results['accuracy'],
+            'alt_tap_target_error': tapping_results['errors'],
+            # rhythm with CoV (period time between taps)
+            'alt_tap_cov': tapping_cov,
+            # isolation (variance of other fingers)
+            'alt_tap_isolation': isolation_score,
+        }
+
+        return results
 
     def analyze_hand_opening(self, exercise: Exercise):
 
@@ -291,7 +355,7 @@ class ExerciseEvaluator:
         active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
                                                                          wrist_name, finger_names)
 
-        # 1.2) correctness of the closing (completeness of movement)
+        # 1.2) correctness of opening & closing (completeness of movement)
 
         # get all peak and valley amplitudes
         all_peak_amps: list = []
@@ -351,7 +415,36 @@ class ExerciseEvaluator:
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
-        pass
+        # 5) Create result dictionary
+
+        # flatten the performance metrics of the active finger
+        performance_features = active_dist_dict[index_key]['features']
+
+        # add exercise specific prefix-key 'open_close'
+        results = {
+            # general kinematic features
+            'open_close_rep_num': performance_features.get('repetition_num', 0.0),
+            'open_close_rep_freq': performance_features.get('repetition_freq', 0.0),
+            'open_close_amp_mean': performance_features.get('amplitude_mean', 0.0),
+            'open_close_amp_pct_90': performance_features.get('amplitude_pct_90', 0.0),
+            'open_close_amp_cov': performance_features.get('amplitude_cov', 0.0),
+            'open_close_period_mean': performance_features.get('period_mean', 0.0),
+            'open_close_period_pct_90': performance_features.get('period_pct_90', 0.0),
+            'open_close_period_cov': performance_features.get('period_cov', 0.0),
+            'open_close_vel_pos_mean': performance_features.get('velocity_pos_mean', 0.0),
+            'open_close_vel_pos_pct_90': performance_features.get('velocity_pos_pct_90', 0.0),
+            'open_close_vel_pos_cov': performance_features.get('velocity_pos_cov', 0.0),
+            'open_close_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
+            'open_close_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
+            'open_close_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            # correctness of opening & closing (completeness of movement)
+            'open_close_extension_score': extension_score,
+            'open_close_flexion_score': flexion_score,
+            # synchronization of finger movement using temporal dispersion
+            'open_close_sync': synchronization_score
+        }
+
+        return results
 
     def analyze_pronation_supination(self, exercise: Exercise):
 
@@ -371,13 +464,13 @@ class ExerciseEvaluator:
         euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(landmark_data, ref_landmark_names)
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        feature_dict = self.kf.calc_kinematic_parameters(euler_y, self.peak_cfg)
+        active_dist_dict = self.kf.calc_kinematic_parameters(euler_y, self.peak_cfg)
 
         # 1.2) correctness of the rotation (completeness of movement)
 
         # get all peak and valley amplitudes
-        peaks = feature_dict['valid_peaks_idx']
-        valleys = feature_dict['valid_valleys_idx']
+        peaks = active_dist_dict['valid_peaks_idx']
+        valleys = active_dist_dict['valid_valleys_idx']
 
         # get peak and valley values of the pronation-supination movement
         pro_valley_vals = euler_y[valleys]
@@ -391,7 +484,7 @@ class ExerciseEvaluator:
         pronation_score = (np.sum(np.abs(pro_valley_vals) > pronation_thresh) / len(pro_valley_vals) * 100) if len(pro_valley_vals) > 0 else 0.0
         supination_score = (np.sum(sup_peak_vals > supination_thresh) / len(sup_peak_vals) * 100) if len(sup_peak_vals) > 0 else 0.0
 
-        # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
+        # 1.3) quality: assess rhythm with CoV (period time between rotations), stability (out-of-plane compensation)
 
         # 1.3.1) calculate the tapping rhythm with CoV
         if len(valleys) > 1:
@@ -415,16 +508,35 @@ class ExerciseEvaluator:
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
-        pass
+        # 5) Create result dictionary
 
-    def analyze_table_tapping(self, exercise):
+        # flatten the performance metrics of the active finger
+        performance_features = active_dist_dict
 
-        # 1) extract the exercise-specific metric
+        # add exercise specific prefix-key 'pro_sup'
+        results = {
+            # general kinematic features
+            'pro_sup_rep_num': performance_features.get('repetition_num', 0.0),
+            'pro_sup_rep_freq': performance_features.get('repetition_freq', 0.0),
+            'pro_sup_amp_mean': performance_features.get('amplitude_mean', 0.0),
+            'pro_sup_amp_pct_90': performance_features.get('amplitude_pct_90', 0.0),
+            'pro_sup_amp_cov': performance_features.get('amplitude_cov', 0.0),
+            'pro_sup_period_mean': performance_features.get('period_mean', 0.0),
+            'pro_sup_period_pct_90': performance_features.get('period_pct_90', 0.0),
+            'pro_sup_period_cov': performance_features.get('period_cov', 0.0),
+            'pro_sup_vel_pos_mean': performance_features.get('velocity_pos_mean', 0.0),
+            'pro_sup_vel_pos_pct_90': performance_features.get('velocity_pos_pct_90', 0.0),
+            'pro_sup_vel_pos_cov': performance_features.get('velocity_pos_cov', 0.0),
+            'pro_sup_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
+            'pro_sup_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
+            'pro_sup_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            # correctness of pronation & supination(completeness of movement)
+            'pro_sup_pronation_score': pronation_score,
+            'pro_sup_supination_score': supination_score,
+            # rhythm with CoV (period time between rotations)
+            'pro_sup_rot_cov': rotation_cov,
+            # rotation stability
+            'pro_sup_isolation': total_comp_movement,
+        }
 
-        # 2) extract general metrics (e.g., task impairment by spectrogram)
-
-        # 3) associated reactions (passive hand movement -> mirror movement)
-
-        # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
-
-        pass
+        return results
