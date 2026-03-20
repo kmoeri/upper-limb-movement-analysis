@@ -552,7 +552,10 @@ class ToolBox:
     @staticmethod
     def get_descriptive_stats(data: np.ndarray, prefix: str = ''):
         """
-        Calculates descriptive statistics - normal version (mean, standard deviation, min, max).
+        Calculates the descriptive statistics: mean, 90th percentile, and coefficient of variation.
+        - The mean captures the overall performance and is sensitive to outlier performances
+        - The 90th percentile captures the biomechanical capacity (the best possible performance)
+        - The CoV represents the consistency and rhythmicity
 
         Args:
             data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
@@ -563,32 +566,11 @@ class ToolBox:
         """
 
         if len(data) == 0:
-            return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0, f'{prefix}_min': 0.0, f'{prefix}_max': 0.0}
+            return {f'{prefix}_mean': 0.0, f'{prefix}_pct_90': 0.0, f'{prefix}_cov': 0.0}
         return {
             f'{prefix}_mean': round(float(np.mean(data)), 3),
-            f'{prefix}_std': round(float(np.std(data)), 3),
-            f'{prefix}_min': round(float(np.min(data)), 3),
-            f'{prefix}_max': round(float(np.max(data)), 3)
-        }
-
-    @staticmethod
-    def get_descriptive_stats_short(data: np.ndarray, prefix: str = ''):
-        """
-        Calculates descriptive statistics - short version (mean and standard deviation).
-
-        Args:
-            data (np.ndarray): A numpy array holding values of an extracted parameter (e.g., amplitudes)
-            prefix (str, optional): The prefix used to name the metric. Defaults to ''.
-
-        Returns:
-            dict: Dictionary with descriptive statistics.
-        """
-
-        if len(data) == 0:
-            return {f'{prefix}_mean': 0.0, f'{prefix}_std': 0.0}
-        return {
-            f'{prefix}_mean': round(float(np.mean(data)), 3),
-            f'{prefix}_std': round(float(np.std(data)), 3),
+            f'{prefix}_pct_90': round(np.percentile(data, 90), 3),
+            f'{prefix}_cov': round((float(np.std(data)) / float(np.mean(data))) if np.mean(data) != 0.0 else 0.0, 3)
         }
 
     @staticmethod

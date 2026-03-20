@@ -202,11 +202,10 @@ class KinematicFeatures:
 
         features = {
             'repetition_freq': 0.0, 'num_repetitions': 0.0,
-            'period_median': 0.0, 'period_iqr': 0.0, 'period_mean': 0.0, 'period_std': 0.0, 'period_min': 0.0, 'period_max': 0.0,
-            'amplitude_median': 0.0, 'amplitude_iqr': 0.0, 'amplitude_mean': 0.0, 'amplitude_std': 0.0, 'amplitude_min': 0.0, 'amplitude_max': 0.0,
-            'velocity_pos_median': 0.0, 'velocity_pos_iqr': 0.0, 'velocity_pos_mean': 0.0, 'velocity_pos_std': 0.0,
-            'velocity_neg_median': 0.0, 'velocity_neg_iqr': 0.0, 'velocity_neg_mean': 0.0, 'velocity_neg_std': 0.0,
-            'cov_period': 0.0, 'cov_amplitude': 0.0, 'cov_pos_velocity': 0.0, 'cov_neg_velocity': 0.0,
+            'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
+            'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
+            'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
+            'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
             'extraction_status': 'failed',
             'valid_peaks_idx': [],
             'valid_valleys_idx': []
@@ -386,7 +385,7 @@ class KinematicFeatures:
         if amplitudes:
             features.update(tb.get_descriptive_stats(np.array(amplitudes), 'amplitude'))
 
-        # velocity
+        # velocities
         velocity_curve = np.gradient(detrended_signal, 1 / self.fps)
         rise_vels, fall_vels = [], []
         all_events = sorted(valid_peaks + valid_valleys, key=lambda x: x['idx'])
@@ -406,17 +405,8 @@ class KinematicFeatures:
                     else:
                         fall_vels.append(np.min(vel_seg))
 
-        features.update(tb.get_descriptive_stats_short(np.array(rise_vels), 'velocity_pos'))
-        features.update(tb.get_descriptive_stats_short(np.array(fall_vels), 'velocity_neg'))
-
-        # coefficient of variation (std/mean)
-        def _safe_cov(std_val, mean_val):
-            return (std_val / mean_val) if mean_val != 0.0 else 0.0
-
-        features['cov_period'] = _safe_cov(features['period_std'], features['period_mean'])
-        features['cov_amplitude'] = _safe_cov(features['amplitude_std'], features['amplitude_mean'])
-        features['cov_pos_velocity'] = _safe_cov(features['velocity_pos_std'], features['velocity_pos_mean'])
-        features['cov_neg_velocity'] = _safe_cov(features['velocity_neg_std'], features['velocity_neg_mean'])
+        features.update(tb.get_descriptive_stats(np.array(rise_vels), 'velocity_pos'))
+        features.update(tb.get_descriptive_stats(np.array(fall_vels), 'velocity_neg'))
 
         # extraction successful
         features['extraction_status'] = 'success'
