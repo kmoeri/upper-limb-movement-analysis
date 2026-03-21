@@ -340,7 +340,7 @@ class Visualizer:
         # plot the group mean (fixed effect)
         # ensure global mean: prevent seaborn from drawing a mean line for each participant
         for ax, condition in zip(face_grid.axes.flat, ['Healthy', 'Affected']):
-            # Get ALL participants for this specific condition
+            # get all participants for this specific condition
             subset = agg_df[agg_df['Hand_Condition'] == condition]
 
             sns.lineplot(data=subset, x="Hand_Role", y="CoV", estimator='mean', errorbar=None, color="black",
@@ -360,7 +360,7 @@ class Visualizer:
         face_grid.figure.suptitle('Impact of Movement: Individual Trajectories (Rest vs. Active)',
                                   fontsize=16, weight='bold')
 
-        # Save the plot
+        # save the plot
         suffix = '.png'
         f_name: str = f'LMM_Interaction_Trajectories_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
@@ -402,7 +402,7 @@ class Visualizer:
 
         plt.tight_layout()
 
-        # Save the plot
+        # save the plot
         suffix = '.png'
         f_name: str = f'LMM_Assumption_Tests_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
@@ -414,7 +414,82 @@ class Visualizer:
     # ============================================================================= #
     #                            3) PARAMETER EXTRACTION                            #
     # ============================================================================= #
+    def viz_repetitive_binary_exercises(self, time_axis: np.ndarray, signal: np.ndarray, features: dict,
+                                        p_id: str = '', ex_id: str = ''):
+        """
+        Visualizes the timeseries of the repetitive binary exercises:
+        - FingerTapping (index finger tapping)
+        - HandOpening (hand opening and closing)
+        - ProSup (pronation supination)
+        Plots the detrended signal, marked peaks, marked valleys, and the zero-crossing baseline.
 
+        Args:
+            time_axis (np.ndarray): Time values (x-axis).
+            signal (np.ndarray): The signal used for detection (usually the DETRENDED signal).
+            features (dict): Output dictionary from 'extract_irregular_movements_parameters'.
+            p_id (str): Participant identifier key. Defaults to ''.
+            ex_id (str): Experiment identifier key. Defaults to ''.
+
+        Returns:
+            None
+        """
+
+        fig, ax = plt.subplots(figsize=(16, 6))
+
+        # plot the main signal
+        ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7,
+                label=ex_id, zorder=2)
+
+        # plot valid peaks (green up-triangles)
+        peak_indices = features.get('valid_peaks_idx', [])
+        if len(peak_indices) > 0:
+            ax.scatter(time_axis[peak_indices], signal[peak_indices],
+                       marker='^', s=80, facecolor='#00CC96', edgecolor='black',
+                       linewidth=1, label='valid peaks', zorder=3)
+
+        # plot valid valleys (red down-triangles)
+        valley_indices = features.get('valid_valleys_idx', [])
+        if len(valley_indices) > 0:
+            ax.scatter(time_axis[valley_indices], signal[valley_indices],
+                       marker='v', s=80, facecolor='#EF553B', edgecolor='black',
+                       linewidth=1, label='valid valleys', zorder=3)
+
+        # zero-crossing baseline
+        ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
+
+        # add annotation for extracted metrics
+        metrics_text = (f"Reps: {features.get('repetition_num', 0):.1f} | "
+                        f"Freq: {features.get('repetition_freq', 0):.2f} Hz\n"
+                        f"Mean Amp: {features.get('amplitude_mean', 0):.2f} | "
+                        f"Mean Period: {features.get('period_mean', 0):.2f}s")
+
+        # position text in the top-left corner (axes coordinates: 0 to 1)
+        ax.text(0.01, 0.96, metrics_text, transform=ax.transAxes,
+                verticalalignment='top', horizontalalignment='left',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9),
+                fontsize=10, zorder=4)
+
+        # layout
+        ax.set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=14, pad=15)
+        ax.set_xlabel('Time [s]', fontsize=12)
+        ax.set_ylabel('Amplitude (Detrended)', fontsize=12)
+        ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        # horizontal legend above the chart
+        ax.legend(loc='lower right', bbox_to_anchor=(1.0, 1.02), ncol=4, frameon=False, fontsize=10)
+
+        plt.tight_layout()
+
+        # Save the plot
+        suffix = '.png'
+        f_name: str = f'{p_id}_{ex_id}_event_detection{suffix}'
+        f_path: str = os.path.join(self.features_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
+
+        plt.close()
     # ============================================================================= #
     #                            4) HELPER FUNCTION                                 #
     # ============================================================================= #

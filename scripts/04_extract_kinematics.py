@@ -11,7 +11,7 @@ from src.exercise_evaluation import ExerciseEvaluator
 from src.utils import save_extracted_data_to_csv
 
 
-def run_kinematics_extractor():
+def run_kinematics_extractor(save_plots: bool = True):
 
     # create class instance from ExerciseEvaluator
     ex_eval: ExerciseEvaluator = ExerciseEvaluator(config['camera_param']['fps'])
@@ -41,13 +41,17 @@ def run_kinematics_extractor():
             try:
                 metrics: dict = {}
                 if 'FingerTapping' in ex_key:
-                    metrics = ex_eval.analyze_finger_tapping(exercise)
+                    metrics = ex_eval.analyze_finger_tapping(exercise, p.pid, save_plots)
+                    exercise.metrics = metrics
                 elif 'FingerAlternation' in ex_key:
                     metrics = ex_eval.analyze_finger_alternation(exercise)
+                    exercise.metrics = metrics
                 elif 'HandOpening' in ex_key:
-                    metrics = ex_eval.analyze_hand_opening(exercise)
+                    metrics = ex_eval.analyze_hand_opening(exercise, p.pid, save_plots)
+                    exercise.metrics = metrics
                 elif 'ProSup' in ex_key:
-                    metrics = ex_eval.analyze_pronation_supination(exercise)
+                    metrics = ex_eval.analyze_pronation_supination(exercise, p.pid, save_plots)
+                    exercise.metrics = metrics
 
                 # add the extracted metrics to the metadata
                 row_meta_data.update(metrics)

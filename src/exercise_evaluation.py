@@ -1,7 +1,6 @@
 # src/analyze.py
 
 # libraries
-import os
 import numpy as np
 import editdistance
 
@@ -10,6 +9,7 @@ from src.config import config
 from src.core import Exercise
 from src.utils import ToolBox
 from src.kinematic_features import KinematicFeatures
+from src.visualization import Visualizer
 
 
 class ExerciseEvaluator:
@@ -18,14 +18,22 @@ class ExerciseEvaluator:
         # instantiate globally
         self.tb = ToolBox(fps=self.fps)
         self.kf = KinematicFeatures(fps=self.fps)
+        self.viz = Visualizer()
         # default config for adaptive peak detection
-        self.peak_cfg: dict = {'min_segment_length': 0.05, 'min_peak_amp_diff': 0.15,
-                               'min_valley_amp_diff': 0.15, 'max_peak_amp_diff': None,
-                               'max_valley_amp_diff': None, 'prominence_factor': 0.35,
+        self.peak_cfg: dict = {'min_segment_length': 0.05,
+                               'min_peak_amp_diff': 0.15,
+                               'min_peak_dur_diff': 0.00,
+                               'min_valley_amp_diff': 0.15,
+                               'min_valley_dur_diff': 0.00,
+                               'max_peak_amp_diff': 0.00,
+                               'max_peak_dur_diff': 0.0,
+                               'max_valley_amp_diff': 0.0,
+                               'prominence_factor': 0.35,
                                'distance_factor': 0.35}
 
     def _extract_distance_based_kinematics(self, landmark_data: dict, ref_hand_size: float,
-                                           ref_landmark_name: str, target_landmark_names: list) -> dict:
+                                           ref_landmark_name: str, target_landmark_names: list,
+                                           custom_peak_cfg: dict = None) -> dict:
         """
         Helper function to calculate normalized Euclidean distance and extract kinematic
         peaks for arbitrary combination of reference landmark and target landmarks combinations.
@@ -35,12 +43,16 @@ class ExerciseEvaluator:
             ref_hand_size (float): Scalar for normalization.
             ref_landmark_name (str): The reference point (e.g., 'wrist1', 'cmc1', 'ftip1').
             target_landmark_names (list): The moving points (e.g., ['ftip2', 'ftip3']).
+            custom_peak_cfg (dict): A dictionary with customized peak detection parameters.
 
         Returns:
             dict: Nested dictionary containing normalized distances and feature parameters.
         """
         performance_dict = {}
         ref_point_lst = landmark_data[ref_landmark_name]
+
+        # determine the config to use
+        current_cfg = custom_peak_cfg if custom_peak_cfg else self.peak_cfg
 
         for target_name in target_landmark_names:
             target_point_lst = landmark_data[target_name]
@@ -50,7 +62,7 @@ class ExerciseEvaluator:
             norm_dist_arr = euclidean_dist / ref_hand_size
 
             # peak extraction
-            feature_dict = self.kf.calc_kinematic_parameters(norm_dist_arr, self.peak_cfg)
+            feature_dict = self.kf.calc_kinematic_parameters(norm_dist_arr, current_cfg)
 
             finger_key = f'{ref_landmark_name}-{target_name}'
             performance_dict[finger_key] = {'normalized_distance': norm_dist_arr,
@@ -58,7 +70,7 @@ class ExerciseEvaluator:
 
         return performance_dict
 
-    def analyze_finger_tapping(self, exercise: Exercise):
+    def analyze_finger_tapping(self, exercise: Exercise, p_id: str, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
         # get current active side
@@ -73,13 +85,16 @@ class ExerciseEvaluator:
         anchor, target = lm_corr_names[0], lm_corr_names[1]
         pair_key: str = f'{anchor}-{target}'
 
+        # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
+        ex_peak_cfg: dict = config['index_ftap'].get('peak_cfg', self.peak_cfg)
+
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                                         anchor, [target])
+                                                                         anchor, [target], ex_peak_cfg)
 
         # 1.2) correctness of the tapping (spatial accuracy)
         valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valleys_idx']
-        norm_dist_arr: np.ndarray = active_dist_dict[pair_key]['features']['normalized_distance']
+        norm_dist_arr: np.ndarray = active_dist_dict[pair_key]['normalized_distance']
 
         if len(valid_valley_idc) > 0:
             valid_dist: float = config['index_ftap']['min_dist_thresh']
@@ -93,7 +108,6 @@ class ExerciseEvaluator:
             accuracy_percentage: float = float((successful_taps / len(valid_valley_idc)) * 100)
         else:
             mean_target_error: float = 0.0
-            successful_taps: int = 0
             accuracy_percentage: float = 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
@@ -108,8 +122,6 @@ class ExerciseEvaluator:
             # dynamic window for isolation (33% of a period)
             half_window: int = max(int(tapping_mean / 6.0), 2)
         else:
-            tapping_mean: float = 0.0
-            tapping_std: float = 0.0
             tapping_cov: float = 0.0
             half_window: int = int(self.fps * 0.05)
 
@@ -170,6 +182,15 @@ class ExerciseEvaluator:
             'idx_tap_isolation': isolation_score,
         }
 
+        # plot visualization
+        if save_plots and performance_features['extraction_status'] == 'success':
+
+            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
+                                                     signal=performance_features['signal_detrended'],
+                                                     features=performance_features,
+                                                     p_id=p_id,
+                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+
         return results
 
     def analyze_finger_alternation(self, exercise: Exercise):
@@ -188,9 +209,12 @@ class ExerciseEvaluator:
         finger_names = lm_corr_names[1:]
         pair_key: str = f'{thumb}-{finger_names}'
 
+        # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
+        ex_peak_cfg: dict = config['ftap_alter'].get('peak_cfg', self.peak_cfg)
+
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                                         thumb, finger_names)
+                                                                         thumb, finger_names, ex_peak_cfg)
 
         # 1.2) correctness of the tapping order (extract tapping sequence and score with Levenshtein Distance)
 
@@ -337,7 +361,7 @@ class ExerciseEvaluator:
 
         return results
 
-    def analyze_hand_opening(self, exercise: Exercise):
+    def analyze_hand_opening(self, exercise: Exercise, p_id: str, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
         # get current active side
@@ -351,9 +375,12 @@ class ExerciseEvaluator:
         wrist_name: str = f'{lm_base_names[0]}{active_side_idx}'
         finger_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names[1:]]
 
+        # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
+        ex_peak_cfg: dict = config['open_close'].get('peak_cfg', self.peak_cfg)
+
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks, ref_hand_size,
-                                                                         wrist_name, finger_names)
+                                                                         wrist_name, finger_names, ex_peak_cfg)
 
         # 1.2) correctness of opening & closing (completeness of movement)
 
@@ -444,9 +471,18 @@ class ExerciseEvaluator:
             'open_close_sync': synchronization_score
         }
 
+        # plot visualization
+        if save_plots and performance_features['extraction_status'] == 'success':
+
+            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
+                                                     signal=performance_features['signal_detrended'],
+                                                     features=performance_features,
+                                                     p_id=p_id,
+                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+
         return results
 
-    def analyze_pronation_supination(self, exercise: Exercise):
+    def analyze_pronation_supination(self, exercise: Exercise, p_id: str, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
 
@@ -463,8 +499,11 @@ class ExerciseEvaluator:
         landmark_data: dict = exercise.clean_hand_landmarks
         euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(landmark_data, ref_landmark_names)
 
+        # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
+        ex_peak_cfg: dict = config['pro_sup'].get('peak_cfg', self.peak_cfg)
+
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict = self.kf.calc_kinematic_parameters(euler_y, self.peak_cfg)
+        active_dist_dict = self.kf.calc_kinematic_parameters(euler_y, ex_peak_cfg)
 
         # 1.2) correctness of the rotation (completeness of movement)
 
@@ -538,5 +577,14 @@ class ExerciseEvaluator:
             # rotation stability
             'pro_sup_isolation': total_comp_movement,
         }
+
+        # plot visualization
+        if save_plots and performance_features['extraction_status'] == 'success':
+
+            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
+                                                     signal=performance_features['signal_detrended'],
+                                                     features=performance_features,
+                                                     p_id=p_id,
+                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results

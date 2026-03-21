@@ -1,7 +1,6 @@
 # src/kinematic_features.py
 
 # libraries
-import os
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy
@@ -211,8 +210,10 @@ class KinematicFeatures:
             'valid_valleys_idx': []
         }
 
+        raw_signal = np.squeeze(raw_signal)
+
         n_samples = len(raw_signal)
-        if n_samples < self.fps:
+        if n_samples < max(self.fps, 10):
             print(f'Error: Trial skipped. Samples ({n_samples}) < Framerate ({self.fps}).')
             features['extraction_status'] = 'failed'
             return features
@@ -410,5 +411,7 @@ class KinematicFeatures:
 
         # extraction successful
         features['extraction_status'] = 'success'
+        features['signal_detrended'] = detrended_signal
+        features['time_axis'] = np.arange(len(detrended_signal)) / self.fps
 
         return features
