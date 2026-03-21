@@ -29,6 +29,10 @@ class Exercise:
 
     metrics: dict = field(default_factory=dict)                 # stores results
 
+    # additional attributes
+    left_hand_size: float = 0.0                                 # median hand size 'left' across all exercises
+    right_hand_size: float = 0.0                                # median hand size 'right' across all exercises
+
 
 class Participant:
     """
