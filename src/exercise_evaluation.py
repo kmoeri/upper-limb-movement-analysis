@@ -1,4 +1,5 @@
 # src/analyze.py
+import pydoc
 
 # libraries
 import numpy as np
@@ -158,6 +159,9 @@ class ExerciseEvaluator:
 
         # add exercise specific prefix-key 'idx_tap'
         results = {
+            # time series
+            'idx_tap_time_series_y': performance_features.get('signal_detrended', []),
+            'idx_tap_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'idx_tap_rep_num': performance_features.get('repetition_num', 0.0),
             'idx_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
@@ -189,6 +193,7 @@ class ExerciseEvaluator:
                                                      signal=performance_features['signal_detrended'],
                                                      features=performance_features,
                                                      p_id=p_id,
+                                                     visit_id=exercise.visit_id,
                                                      ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
@@ -335,6 +340,8 @@ class ExerciseEvaluator:
 
         # add exercise specific prefix-key 'alt_tap'
         results = {
+            # time series
+
             # general kinematic features
             'alt_tap_rep_num': performance_features.get('repetition_num', 0.0),
             'alt_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
@@ -449,6 +456,9 @@ class ExerciseEvaluator:
 
         # add exercise specific prefix-key 'open_close'
         results = {
+            # time series
+            'open_close_time_series_y': performance_features.get('signal_detrended', []),
+            'open_close_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'open_close_rep_num': performance_features.get('repetition_num', 0.0),
             'open_close_rep_freq': performance_features.get('repetition_freq', 0.0),
@@ -478,6 +488,7 @@ class ExerciseEvaluator:
                                                      signal=performance_features['signal_detrended'],
                                                      features=performance_features,
                                                      p_id=p_id,
+                                                     visit_id=exercise.visit_id,
                                                      ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
@@ -554,6 +565,9 @@ class ExerciseEvaluator:
 
         # add exercise specific prefix-key 'pro_sup'
         results = {
+            # time series
+            'pro_sup_time_series_y': performance_features.get('signal_detrended', []),
+            'pro_sup_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'pro_sup_rep_num': performance_features.get('repetition_num', 0.0),
             'pro_sup_rep_freq': performance_features.get('repetition_freq', 0.0),
@@ -585,6 +599,7 @@ class ExerciseEvaluator:
                                                      signal=performance_features['signal_detrended'],
                                                      features=performance_features,
                                                      p_id=p_id,
+                                                     visit_id=exercise.visit_id,
                                                      ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results

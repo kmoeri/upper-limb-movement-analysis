@@ -7,6 +7,8 @@ import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.animation as animation
 from scipy import stats
 
 # modules
@@ -27,6 +29,12 @@ class Visualizer:
         # classification results directory (child)
         self.classification_res_path = os.path.join(self.results_path, '04_classification')
         os.makedirs(self.classification_res_path, exist_ok=True)
+        # kinematics quality check results directory (child)
+        self.kinematics_quality_res_path = os.path.join(self.results_path, '05_kinematics_quality')
+        os.makedirs(self.kinematics_quality_res_path, exist_ok=True)
+
+        # video frame rate
+        self.fps = config['camera_param']['fps']
 
     # ============================================================================= #
     #                            2) TEMPORAL CONSISTENCY                            #
@@ -415,7 +423,7 @@ class Visualizer:
     #                            3) PARAMETER EXTRACTION                            #
     # ============================================================================= #
     def viz_repetitive_binary_exercises(self, time_axis: np.ndarray, signal: np.ndarray, features: dict,
-                                        p_id: str = '', ex_id: str = ''):
+                                        p_id: str = '', visit_id: str = '', ex_id: str = ''):
         """
         Visualizes the timeseries of the repetitive binary exercises:
         - FingerTapping (index finger tapping)
@@ -427,6 +435,7 @@ class Visualizer:
             time_axis (np.ndarray): Time values (x-axis).
             signal (np.ndarray): The signal used for detection (usually the DETRENDED signal).
             features (dict): Output dictionary from 'extract_irregular_movements_parameters'.
+            visit_id (str, optional): Visit ID. Defaults to ''.
             p_id (str): Participant identifier key. Defaults to ''.
             ex_id (str): Experiment identifier key. Defaults to ''.
 
@@ -437,8 +446,10 @@ class Visualizer:
         fig, ax = plt.subplots(figsize=(16, 6))
 
         # plot the main signal
-        ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7,
-                label=ex_id, zorder=2)
+        ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7, label=ex_id, zorder=2)
+
+        # zero-crossing baseline
+        ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
 
         # plot valid peaks (green up-triangles)
         peak_indices = features.get('valid_peaks_idx', [])
@@ -453,9 +464,6 @@ class Visualizer:
             ax.scatter(time_axis[valley_indices], signal[valley_indices],
                        marker='v', s=80, facecolor='#EF553B', edgecolor='black',
                        linewidth=1, label='valid valleys', zorder=3)
-
-        # zero-crossing baseline
-        ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
 
         # add annotation for extracted metrics
         metrics_text = (f"Reps: {features.get('repetition_num', 0):.1f} | "
@@ -478,18 +486,191 @@ class Visualizer:
         ax.spines['right'].set_visible(False)
 
         # horizontal legend above the chart
-        ax.legend(loc='lower right', bbox_to_anchor=(1.0, 1.02), ncol=4, frameon=False, fontsize=10)
+        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=True, fontsize=10)
 
         plt.tight_layout()
 
         # Save the plot
         suffix = '.png'
-        f_name: str = f'{p_id}_{ex_id}_event_detection{suffix}'
+        f_name: str = f'{p_id}-{visit_id}_{ex_id}_event_detection{suffix}'
         f_path: str = os.path.join(self.features_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
 
         plt.close()
+
     # ============================================================================= #
-    #                            4) HELPER FUNCTION                                 #
+    #                            4) KINEMATICS QUALITY CHECK                        #
     # ============================================================================= #
+    def viz_render_dashboard(self, dashboard_data: dict, p_id: str, visit_id: str, ex_id: str,
+                             side_focus: str, skip_frames: int = 2) -> None:
+        """
+        Renders a modular quality control dashboard and saves it as a video file (mp4).
+
+        Args:
+            dashboard_data (dict): Dictionary containing pose, hands, and metrics.
+            p_id (str): Participant identifier key.
+            visit_id (str): Visit ID.
+            ex_id (str): Experiment identifier key.
+            side_focus (str): 'R' or 'L' indicating the active hand.
+            skip_frames (int): Number of frames to step by (1 = full fps). Defaults to 2.
+
+        Returns:
+            None
+        """
+
+        metrics_dict = dashboard_data.get('metrics', {})
+        num_metrics = len(metrics_dict)
+
+        # Ensure skip_frames is at least 1 to prevent np.arange crash
+        skip_frames = max(1, skip_frames)
+
+        # Extract number of frames from whichever hand exists
+        sample_lm = None
+        if dashboard_data.get('right_hand'):
+            sample_lm = list(dashboard_data['right_hand'].values())[0]
+        elif dashboard_data.get('left_hand'):
+            sample_lm = list(dashboard_data['left_hand'].values())[0]
+        else:
+            return  # no hand data to plot
+
+        n_frames = len(sample_lm[0])
+        frames_to_run = np.arange(0, n_frames, skip_frames)
+
+        # set up the dynamic GridSpec figure
+        # top row is for 3D plots; subsequent rows are for 1D metrics.
+        total_rows = 1 + num_metrics
+        fig = plt.figure(figsize=(16, 4 + (3 * num_metrics)))
+        fig.suptitle('Kinematic Quality Control Dashboard', fontsize=16, fontweight='bold')
+
+        gs = gridspec.GridSpec(total_rows, 3, figure=fig, hspace=0.4, wspace=0.2)
+
+        # initialize 3D plots (top row): right hand (col 1), pose (col 2), left hand (col 3)
+        ax_right = fig.add_subplot(gs[0, 0], projection='3d')
+        ax_pose = fig.add_subplot(gs[0, 1], projection='3d')
+        ax_left = fig.add_subplot(gs[0, 2], projection='3d')
+
+        # helper to calculate static axis limits and setup 3D plots
+        def _setup_3d_axis(ax, title, lm_dict, title_color='black'):
+            ax.set_title(title, fontsize=12, fontweight='bold', color=title_color)
+            if not lm_dict:
+                return None, []
+
+            # calculate global min/max for static bounding box
+            all_x = [x for lm in lm_dict.values() for x in lm[0]]
+            all_y = [y for lm in lm_dict.values() for y in lm[1]]
+            all_z = [z for lm in lm_dict.values() for z in lm[2]]
+
+            pad = 0.05
+            ax.set_xlim([np.min(all_x) - pad, np.max(all_x) + pad])
+            ax.set_ylim([np.min(all_y) - pad, np.max(all_y) + pad])
+            ax.set_zlim([np.min(all_z) - pad, np.max(all_z) + pad])
+
+            ax.invert_yaxis()  # MediaPipe's y-axis is positive-down
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_zticklabels([])
+
+            # initialize empty plot elements
+            pts, = ax.plot([], [], [], 'ro', markersize=3, alpha=0.7)
+            return pts
+
+        # define dynamic titles and colors based on side_focus
+        right_color = '#2ca02c' if side_focus == 'R' else '#7f7f7f'
+        left_color = '#2ca02c' if side_focus == 'L' else '#7f7f7f'
+
+        right_title = "Right Hand (Active)" if side_focus == 'R' else "Right Hand"
+        left_title = "Left Hand (Active)" if side_focus == 'L' else "Left Hand"
+
+        # set up the three axes for each 3D animation plot
+        pts_right = _setup_3d_axis(ax_right, right_title, dashboard_data.get('right_hand'), title_color=right_color)
+        pts_pose = _setup_3d_axis(ax_pose, "Pose Skeleton", dashboard_data.get('pose'))
+        pts_left = _setup_3d_axis(ax_left, left_title, dashboard_data.get('left_hand'), title_color=left_color)
+
+        # setup 3D links between landmarks
+        pose_links = config['body_parts'].get('pose_link_lst', [])
+        hand_links = config['body_parts'].get('hands_link_lst', [])
+
+        lines_right = [ax_right.plot([], [], [], '-', c=right_color, lw=2)[0] for _ in hand_links] if pts_right else []
+        lines_pose = [ax_pose.plot([], [], [], '-', c='#1f77b4', lw=2)[0] for _ in pose_links] if pts_pose else []
+        lines_left = [ax_left.plot([], [], [], '-', c=left_color, lw=2)[0] for _ in hand_links] if pts_left else []
+
+        # initialize the 1D metric plots (bottom rows)
+        tracker_lines = []
+
+        # run for each metric (can be only one or multiple)
+        for i, (m_title, (t_arr, sig_arr)) in enumerate(metrics_dict.items()):
+            # span the metric's time series across all 3 columns
+            ax_m = fig.add_subplot(gs[i + 1, :])
+            ax_m.set_title(m_title, fontsize=10, fontweight='bold')
+
+            # plot the static signal
+            ax_m.plot(t_arr, sig_arr, color='black', lw=1.5)
+            ax_m.set_xlim((float(t_arr[0]), float(t_arr[-1])))
+            ax_m.set_ylabel('Amplitude', fontsize=9)
+            ax_m.grid(True, linestyle=':', alpha=0.6)
+
+            if i == num_metrics - 1:
+                ax_m.set_xlabel('Time [s]', fontsize=10)
+
+            # initialize a red vertical tracker line at position x = 0
+            vline = ax_m.axvline(x=t_arr[0], color='red', lw=2, zorder=5)
+            tracker_lines.append((vline, t_arr))  # save tuple of line and its time array
+
+        plt.tight_layout()
+
+        # defines the update function
+        def update(frame):
+            updated_artists = []
+
+            # helper to update the 3D skeletons
+            def update_skeleton(lm_dict, pts, lines, links):
+
+                # return for missing data
+                if not lm_dict or not pts:
+                    return
+
+                xs = [lm_dict[key][0][frame] for key in lm_dict.keys()]
+                ys = [lm_dict[key][1][frame] for key in lm_dict.keys()]
+                zs = [lm_dict[key][2][frame] for key in lm_dict.keys()]
+                pts.set_data(xs, ys)
+                pts.set_3d_properties(zs)
+                updated_artists.append(pts)
+
+                for line, link in zip(lines, links):
+                    lm1, lm2 = link
+                    if lm1 in lm_dict and lm2 in lm_dict:
+                        line.set_data([lm_dict[lm1][0][frame], lm_dict[lm2][0][frame]],
+                                      [lm_dict[lm1][1][frame], lm_dict[lm2][1][frame]])
+                        line.set_3d_properties([lm_dict[lm1][2][frame], lm_dict[lm2][2][frame]])
+                        updated_artists.append(line)
+
+            # update the skeleton positions for the animation
+            update_skeleton(dashboard_data.get('right_hand'), pts_right, lines_right, hand_links)
+            update_skeleton(dashboard_data.get('pose'), pts_pose, lines_pose, pose_links)
+            update_skeleton(dashboard_data.get('left_hand'), pts_left, lines_left, hand_links)
+
+            # update the 1D red tracker lines
+            for vline, t_arr in tracker_lines:
+                # grab the time at the current frame (in case arrays differ slightly in length)
+                idx = min(frame, len(t_arr) - 1)
+                vline.set_xdata([t_arr[idx], t_arr[idx]])
+                updated_artists.append(vline)
+
+            return updated_artists
+
+        # file naming
+        f_name = f'{p_id}-{visit_id}_{ex_id}_QC.mp4'
+        out_path = os.path.join(self.kinematics_quality_res_path, f_name)
+
+        # render to videos (mp4)
+        print(f"Rendering the quality check dashboard to {out_path}...")
+        interval_ms = (1000.0 / self.fps) * skip_frames
+
+        # run the animation
+        ani = animation.FuncAnimation(fig, update, frames=frames_to_run, interval=interval_ms, blit=True)
+
+        # save the video file using ffmpeg. Higher bitrates ensure less blurry frames.
+        ani.save(out_path, writer='ffmpeg', fps=(self.fps / skip_frames), bitrate=2000)
+
+        plt.close(fig)

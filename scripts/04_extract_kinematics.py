@@ -62,6 +62,10 @@ def run_kinematics_extractor(save_plots: bool = True):
             except Exception as e:
                 print(f'Error extracting {ex_key} for {p.pid}: {e}')
 
+        # 'update' (overwrites) the participant object file with the new metrics data.
+        p.save(participant_objs_path)
+        print(f"Successfully updated pickle file for {p.pid}_{p.visit_id}")
+
     # save the extracted features to a csv file
     save_extracted_data_to_csv(all_extracted_features_lst, out_dir=os.path.join(project_path, 'data', '04_features'))
 
