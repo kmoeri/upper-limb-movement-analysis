@@ -10,6 +10,7 @@ import pandas as pd
 from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
+from plotly.graph_objs.indicator.gauge import axis
 from scipy.signal import savgol_filter
 from scipy.signal import ShortTimeFFT
 from scipy.spatial.transform import Rotation
@@ -540,12 +541,20 @@ class ToolBox:
     def calc_euclidean_dist(landmark_a: list, landmark_b: list) -> np.ndarray:
 
         # create a point vector and transpose (row vec -> column vec)
-        thumb_point_vec = np.array([landmark_a]).T
-        finger_point_vec = np.array([landmark_b]).T
+        #thumb_point_vec = np.array([landmark_a]).T
+        #finger_point_vec = np.array([landmark_b]).T
 
         # calculate the Euclidean difference
-        diff_vec = thumb_point_vec - finger_point_vec
-        euclidean_dist = np.linalg.norm(diff_vec, axis=1)
+        #diff_vec = thumb_point_vec - finger_point_vec
+        #euclidean_dist = np.linalg.norm(diff_vec, axis=1)
+
+        # TEMP TEST
+        a_2d = np.array(landmark_a)[:2]
+        b_2d = np.array(landmark_b)[:2]
+
+        # Calculate the 2D Euclidean difference
+        diff_vec = a_2d - b_2d
+        euclidean_dist = np.linalg.norm(diff_vec, axis=0)
 
         return euclidean_dist
 
@@ -620,7 +629,7 @@ class ToolBox:
             z_vec: np.ndarray = np.cross((index_lm - wrist_lm), (pinky_lm - wrist_lm))
 
             # align coordinate system depending on the current hand side
-            if lm_name_lst[0][-1] == '1': # left Hand
+            if lm_name_lst[0][-1] == '1': # left hand
                 z_vec = z_vec * (-1)
 
             # calculate the x_vector using the cross product of the other two vectors
@@ -639,55 +648,56 @@ class ToolBox:
             z_vec_norm: np.ndarray = np.divide(z_vec, norm_z[:, np.newaxis], out=np.zeros_like(z_vec),
                                                where=norm_z[:, np.newaxis] != 0)
 
-            return x_vec_norm, y_vec_norm, z_vec_norm
+            # also returns norm_x to identify tracking loss
+            return x_vec_norm, y_vec_norm, z_vec_norm, norm_x
 
         # get basis vectors (y-distal, x-medial, z-palm)
-        x_n, y_n, z_n = _get_wrist_coordinate_system(landmarks_dict, landmark_name_lst)
-        wrist_lm_arr: np.ndarray = landmarks_dict[landmark_name_lst[0]]
-        frame_num: int = wrist_lm_arr.shape[0]
+        x_n, y_n, z_n, norm_x = _get_wrist_coordinate_system(landmarks_dict, landmark_name_lst)
+
+        # stack vectors to matrix
+        mats: np.ndarray = np.stack((x_n, y_n, z_n), axis=-1)
+
+        # replace zero-matrices with the identity matrix
+        invalid_mask = (norm_x == 0)
+        mats[invalid_mask] = np.eye(3)
 
         # convert to rotation object
-        mats: np.ndarray = np.stack((x_n, y_n, z_n), axis=-1)
         rot_objs = Rotation.from_matrix(mats)
 
-        # initialize arrays
-        euler_accumulated: np.ndarray = np.zeros((frame_num, 3))
+        # calculate the absolute rotation relative to the first valid frame
+        valid_idc: int = np.where(~invalid_mask)[0]
+        if len(valid_idc) == 0:
+            return np.zeros(len(mats)), np.zeros(len(mats)), np.zeros(len(mats))
 
-        # initialize mask to track max velocity violations
-        limit_mask: np.ndarray = np.zeros(frame_num, dtype=bool)
+        # get the first frame with a valid tracking to define the base reference
+        base_rot = rot_objs[valid_idc[0]]
 
-        # iterate and accumulate
-        for i in range(1, frame_num):
-            # calculate delta rotation between current and previous frame
-            # R_delta = R_prev^-1 * R_curr
-            delta_rot_obj = rot_objs[i - 1].inv() * rot_objs[i]
-            delta_euler = delta_rot_obj.as_euler('xyz', degrees=True)
+        # calculate delta rotation between current and previous frame (R_delta = R_prev^-1 * R_curr)
+        rel_rot_objs = base_rot.inv() * rot_objs
 
-            # shortest path correction - wrap delta to [-180, 180]
-            delta_euler = (delta_euler + 180) % 360 - 180
+        # extract Euler angles: pronation-supination is around y-axis -> start with y rotation to prevent gimbal lock
+        euler_angles = rel_rot_objs.as_euler('YXZ', degrees=True)
 
-            # check for spatial jumps (high velocities) - rotations exceeding 38 degrees per frame
-            if np.any(np.abs(delta_euler) > 38):
-                limit_mask[i] = True
-                delta_euler = np.zeros(3)
+        # fix the +/- 180° jumps (jitter handling)
+        # 1) np.unwrap connects angles that flip from 179 to -179
+        # 2) convert angles to rad for np.unwrap and then back to degrees
+        euler_unwrapped = np.rad2deg(np.unwrap(np.deg2rad(euler_angles), axis=0))
 
-            # ignore tiny rotations (jitter)
-            # if np.all(np.abs(delta_euler) < 0.2):
-            #     delta_euler = np.zeros(3)
+        # create dataframe with euler angles using the correct order (YXZ)
+        euler_df: pd.DataFrame = pd.DataFrame(euler_unwrapped, columns=['y', 'x', 'z'])
 
-            # add to total angle
-            euler_accumulated[i] = euler_accumulated[i - 1] + delta_euler
+        # mask tracking failures
+        euler_df.loc[invalid_mask] = np.nan
 
-        # create dataframe from accumulated euler angles
-        euler_df: pd.DataFrame = pd.DataFrame(euler_accumulated, columns=['x', 'y', 'z'])
-
-        # set identified velocity violations to NaN (for 'interpolate' function)
+        # apply a velocity limit
+        velocity = euler_df.diff().abs()
+        limit_mask = (velocity > 38).any(axis=1)
         euler_df.loc[limit_mask] = np.nan
 
         # interpolate (monotonic cubic)
         euler_df = euler_df.interpolate(method='pchip', limit_direction='both')
 
-        # extract the angle for pronation-supination
+        # extract the angle for pronation-supination and return in standard XYZ order
         euler_angles: tuple = (euler_df['x'].to_numpy(), euler_df['y'].to_numpy(), euler_df['z'].to_numpy())
 
         return euler_angles
