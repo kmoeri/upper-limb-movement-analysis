@@ -20,6 +20,7 @@ class Exercise:
 
     # metadata
     cam_id: str                                                 # e.g., 'camZ'
+    tracker_type: str = 'mediapipe'                             # type of pose estimation and tracking
 
     # data storage
     raw_pose_landmarks: dict                                    # tracked pose landmarks raw
@@ -29,11 +30,6 @@ class Exercise:
 
     metrics: dict = field(default_factory=dict)                 # stores results
 
-    # additional attributes
-    left_hand_size: float = 0.0                                 # median hand size 'left' across all exercises
-    right_hand_size: float = 0.0                                # median hand size 'right' across all exercises
-
-
 class Participant:
     """
     The Participant class represents one visit of a participant.
@@ -42,9 +38,13 @@ class Participant:
     - affected side of participant (R or L)
     """
     def __init__(self, pid: str, visit_id: str, affected_side: str):
-        self.pid = pid
-        self.visit_id = visit_id
-        self.affected_side = affected_side
+        self.pid = pid                                  # participant identifier ('P001', 'P002', ...)
+        self.visit_id = visit_id                        # visit identifier ('T1', 'T2', 'T3')
+        self.affected_side = affected_side              # 'Healthy' or 'Affected'
+
+        # additional attributes
+        self.left_hand_size: float = 0.0                # median hand size 'left' across all exercises
+        self.right_hand_size: float = 0.0               # median hand size 'right' across all exercises
 
         # storage: e.g., "FingerTapping_Affected"
         self.exercises: dict[str, Exercise] = {}

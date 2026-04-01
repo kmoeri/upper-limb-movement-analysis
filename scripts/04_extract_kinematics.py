@@ -62,6 +62,33 @@ def run_kinematics_extractor(save_plots: bool = True):
             except Exception as e:
                 print(f'Error extracting {ex_key} for {p.pid}: {e}')
 
+        # calculate the global hand size (median)
+        left_hand_sizes: list = []
+        right_hand_sizes: list = []
+
+        # iterate across each exercise for a given participant
+        for ex in p.exercises.values():
+
+            lms = ex.raw_hand_landmarks
+            if not lms:
+                continue
+
+            # calculate the median hand size for the left hand (distance: wrist1 - mcp13)
+            if 'wrist1' in lms and 'mcp13' in lms:
+                diff_left: np.ndarray = np.array(lms['wrist1'] - lms['mcp13'])
+                dist_left: np.ndarray = np.linalg.norm(diff_left, axis=0)
+                left_hand_sizes.append(dist_left)
+
+            # calculate the median hand size for the right hand (distance: wrist1 - mcp13)
+            if 'wrist2' in lms and 'mcp23' in lms:
+                diff_right: np.ndarray = np.array(lms['wrist2'] - lms['mcp23'])
+                dist_right: np.ndarray = np.linalg.norm(diff_right, axis=0)
+                right_hand_sizes.append(dist_right)
+
+        # add the median value to the hand size attribute of the Participant object
+        p.left_hand_sizes = float(np.median(left_hand_sizes)) if left_hand_sizes else 0.0
+        p.right_hand_sizes = float(np.median(right_hand_sizes)) if right_hand_sizes else 0.0
+
         # 'update' (overwrites) the participant object file with the new metrics data.
         p.save(participant_objs_path)
         print(f"Successfully updated pickle file for {p.pid}_{p.visit_id}")

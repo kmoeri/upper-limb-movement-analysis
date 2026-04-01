@@ -11,8 +11,7 @@ from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
 from plotly.graph_objs.indicator.gauge import axis
-from scipy.signal import savgol_filter
-from scipy.signal import ShortTimeFFT
+from scipy.signal import savgol_filter, butter, filtfilt, ShortTimeFFT
 from scipy.spatial.transform import Rotation
 
 # modules
@@ -112,20 +111,166 @@ class ToolBox:
 
         return pixel_landmarks
 
-    def filter_landmarks(self, landmarks_dict: dict) -> dict:
+    def apply_padded_filter(self, signal_data: np.ndarray, filter_func, pad_seconds: float = 1.0, **kwargs) -> np.ndarray:
         """
-            Preprocess ndarray time series of landmark data in three distinct stages:
-            - Hampel: detects outliers (large jumps) and replaces them with a local median.
-            - Kalman: smooths signal, predicts values for missing data, and provides better estimates.
-            - Savitzky-Golay: clean-up residual noise/jitter
+        Pads a signal with reflected edges, applies a filter, and slices it back to original length.
+        This eliminates edge artifacts from Savgol and Butterworth filters.
+
+        Args:
+            signal_data (np.ndarray): The 1D signal to filter.
+            filter_func (callable): The filter function to apply (e.g., _robust_detrend, apply_savgol).
+            pad_seconds (float): How many seconds of data to mirror on each side. Defaults to 1.0.
+            **kwargs: Arguments to pass to the filter function.
+
+        Returns:
+            np.ndarray: The filtered signal, identical in length to the input.
+        """
+
+        # calculate the padding length (e.g., 90 frames for 1 second)
+        pad_len = int(pad_seconds * self.fps)
+
+        # if the signal is too short to pad that much, reduce padding
+        pad_len = min(pad_len, len(signal_data) - 1)
+        if pad_len < 1:
+            return filter_func(signal_data, **kwargs)  # too short to pad; filter normally
+
+        # pad with reflected data (e.g., [3,2,1 | 1,2,3,4,5 | 5,4,3])
+        padded_signal = np.pad(signal_data, pad_width=pad_len, mode='reflect')
+
+        # apply specific filter
+        filtered_padded_signal = filter_func(padded_signal, **kwargs)
+
+        # slice off the padding to return to the original signal length
+        clean_signal = filtered_padded_signal[pad_len:-pad_len]
+
+        return clean_signal
+
+    # Hampel & Butterworth (4th order)
+    def filter_landmarks_butter(self, landmarks_dict: dict) -> dict:
+        """
+        Preprocess ndarray time series of landmark data in two distinct stages:
+        - Hampel: detects outliers (large jumps) and replaces them with a local median.
+        - Butterworth: applies a zero-lag, 4th-order low-pass filter to cleanly remove high-frequency jitter.
+
+        Args:
+            landmarks_dict (dict): Dictionary of raw landmarks (3D coordinates).
+
+        Returns:
+            filtered_landmarks (dict): Dictionary containing the processed motion data.
+        """
+
+        # configurations
+        MAX_GAP_THRESHOLD: int = config['preprocessing']['max_gap_threshold']
+        FS: float = self.fps
+        CUTOFF_FREQ: float = config['preprocessing'].get('butter_cutoff_freq', 10.0)
+        BUTTER_ORDER: int = config['preprocessing'].get('butter_order', 4)
+
+        def _max_repeated_nan(arr: np.ndarray) -> int:
+            """
+            Calculates the maximum gap (number of consecutive) NaN values in an array.
 
             Args:
-                landmarks_dict (dict): Dictionary of normalized landmarks (3D coordinates).
+                arr (np.ndarray): 1D array.
 
             Returns:
-                data_processed_df (pd.DataFrame): Processed motion data.
-                max_nan_gap_overall (int): the maximum number of consecutive nans in the entire DataFrame.
+                gap (int): maximum count of consecutive nans.
             """
+            mask = np.concatenate(([False], np.isnan(arr), [False]))
+            if ~mask.any():
+                return 0
+            else:
+                idx = np.nonzero(mask[1:] != mask[:-1])[0]
+                gap: int = (idx[1::2] - idx[::2]).max()
+                return gap
+
+        def _butterworth_lowpass(data_arr: np.ndarray, cutoff: float, fs: float, order: int) -> np.ndarray:
+            """
+            Applies a zero-phase Butterworth lowpass filter.
+
+            Args:
+                data_arr (np.ndarray): 1D array of landmark data.
+                cutoff (float): lowpass filter cutoff frequency.
+                fs (float): sampling frequency of data.
+                order (int): order of filter.
+
+            Returns:
+                filtered_arr (np.ndarray): 1D array of filtered landmark data.
+            """
+
+            # generate filter coefficients
+            b, a = butter(N=order, Wn=cutoff, fs=fs, btype='low')
+
+            # apply filter forward and backward to eliminate phase delay
+            filtered_data = filtfilt(b, a, data_arr)
+
+            return filtered_data
+
+        # initialize output dictionary
+        filtered_landmarks: dict = {}
+
+        # iterate over items (key, value)
+        for landmark_name, landmark_axes in landmarks_dict.items():
+
+            landmark_data_lst: list = []    # reset list
+            is_gap_exceeded: bool = False   # gap safety flag
+
+            # check for gaps across all axes (x, y, z)
+            for landmark_axis in landmark_axes:
+                if _max_repeated_nan(landmark_axis) > MAX_GAP_THRESHOLD:
+                    is_gap_exceeded = True
+
+            # handle axes with gaps that exceed the threshold
+            if is_gap_exceeded:
+                print(f'Landmark {landmark_name} was flagged as invalid due to missing data > {MAX_GAP_THRESHOLD}.')
+                nan_arr: np.ndarray = np.full_like(landmark_axes[0], np.nan)
+                filtered_landmarks[landmark_name] = [nan_arr, nan_arr, nan_arr]
+                continue
+
+            # preprocessing loop per axis
+            for data_arr in landmark_axes:
+
+                # interpolate gaps for Hampel and Butterworth filter
+                # -> IIR filters will output all NaNs if there is a single NaN
+                data_series: pd.Series = pd.Series(data_arr)
+                interp_data: np.ndarray = data_series.interpolate(method='linear', limit_direction='both').to_numpy()
+
+                # Hampel filtering
+                try:
+                    hampel_filt_arr: np.ndarray = hampel(interp_data,
+                                                         config['preprocessing']['hampel_window_size'],
+                                                         config['preprocessing']['hampel_n_sigma']).filtered_data
+                except Exception:
+                    hampel_filt_arr: np.ndarray = interp_data
+
+                # Butterworth lowpass filtering
+                butter_filt_arr: np.ndarray = self.apply_padded_filter(hampel_filt_arr,
+                                                                       filter_func=_butterworth_lowpass,
+                                                                       pad_seconds=1.0,
+                                                                       cutoff = CUTOFF_FREQ,
+                                                                       fs = FS,
+                                                                       order = BUTTER_ORDER)
+
+                landmark_data_lst.append(butter_filt_arr)
+
+            filtered_landmarks[landmark_name] = landmark_data_lst
+
+        return filtered_landmarks
+
+    # Hampel & Kalman & Savgol
+    def filter_landmarks_kalman(self, landmarks_dict: dict) -> dict:
+        """
+        Preprocess ndarray time series of landmark data in three distinct stages:
+        - Hampel: detects outliers (large jumps) and replaces them with a local median.
+        - Kalman: smooths signal, predicts values for missing data, and provides better estimates.
+        - Savitzky-Golay: clean-up residual noise/jitter
+
+        Args:
+            landmarks_dict (dict): Dictionary of normalized landmarks (3D coordinates).
+
+        Returns:
+            data_processed_df (pd.DataFrame): Processed motion data.
+            max_nan_gap_overall (int): the maximum number of consecutive nans in the entire DataFrame.
+        """
 
         # configurations
         MAX_GAP_THRESHOLD: int = config['preprocessing']['max_gap_threshold']
@@ -262,9 +407,12 @@ class ToolBox:
                                                                        config['preprocessing']['kalman_R_scale'])
 
                 # Savitzky-Golay filtering
-                sg_filt_arr: np.ndarray = savgol_filter(kalman_filt_arr,
-                                                        config['preprocessing']['savgol_window_length'],
-                                                        config['preprocessing']['savgol_polyorder'])
+                sg_filt_arr: np.ndarray = self.apply_padded_filter(kalman_filt_arr,
+                                                                   filter_func=savgol_filter,
+                                                                   pad_seconds=1.0,
+                                                                   window_length=config['preprocessing']['savgol_window_length'],
+                                                                   polyorder=config['preprocessing']['savgol_polyorder']
+                                                                   )
 
                 landmark_data_lst.append(sg_filt_arr)
 
