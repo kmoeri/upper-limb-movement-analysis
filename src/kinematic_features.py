@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy
-from scipy.signal import find_peaks, detrend, butter, sosfiltfilt
+from scipy.signal import find_peaks, medfilt, butter, sosfiltfilt
 
 # modules
 from src.config import config
@@ -219,44 +219,59 @@ class KinematicFeatures:
             return features
 
         # 1) detrend
-        def _robust_detrend(signal_data: np.ndarray, cutoff: float = 0.3) -> np.ndarray:
+        def _robust_detrend(signal_data: np.ndarray, low_cutoff: float = 0.3, high_cutoff: float = 15) -> np.ndarray:
             """
-            Removes complex, non-linear trends (wandering baselines) using a zero-phase high-pass filter.
+            Removes non-linear baseline drifts (wandering baselines) and high frequency jitter
+            using a zero-phase Bandpass filter.
 
             Args:
                 signal_data (np.ndarray): The raw signal.
-                cutoff (float): Frequency below which to remove data. defaults to 0.3 Hz.
+                low_cutoff (float): Frequency below which to remove data. defaults to 0.3 Hz.
+                high_cutoff (float): Frequency above which to remove data. Defaults to 15 Hz.
 
             Returns:
                 det_signal (np.ndarray): The detrended signal.
             """
 
-            # fall back to linear detrend for a short signal
-            if len(signal_data) < 3 * (self.fps / cutoff):
-                det_signal: np.ndarray = detrend(signal_data, type='linear')
-                return det_signal
+            # requires at least 1 full period  of the lowest frequency
+            min_samples: int = int(1.0 * (self.fps / low_cutoff))
 
-            # 2nd order Butterworth high-pass filter
-            sos = butter(2, cutoff, btype='highpass', fs=self.fps, output='sos')
+            # fall back to 2nd order polynomial for a short signal
+            if len(signal_data) < min_samples:
+                x: np.ndarray = np.arange(len(signal_data))
+                p: np.ndarray = np.polyfit(x, signal_data, 2)
+                trend = np.polyval(p, x)
+                return signal_data - trend
+
+            # 4th order Butterworth Bandpass filter
+            sos = butter(4, [low_cutoff, high_cutoff], btype='bandpass', fs=self.fps, output='sos')
 
             # apply filter forward and backward (zero phase distortion): centers the signal around 0
             det_signal: np.ndarray = sosfiltfilt(sos, signal_data)
             return det_signal
 
         # detrend the raw signal
-        try:
-            detrended_signal = _robust_detrend(raw_signal, cutoff=0.3)
-        except NameError:
-            detrended_signal = detrend(raw_signal, type='linear')
+        detrended_signal: np.ndarray = _robust_detrend(raw_signal, low_cutoff=0.3, high_cutoff=15.0)
 
         # 2) scouting for peaks and valleys using zero-crossings
-        # extract zero-crossings by elementwise sign the signal
-        signs: np.ndarray = np.sign(detrended_signal)
-        signs[signs == 0] = 1
-        zero_crossings = np.where(np.diff(signs))[0]
 
-        scout_peaks = []
-        scout_valleys = []
+        window_size: int = int(self.fps * 1.0)
+
+        # ensure odd kernel size
+        if window_size % 2 == 0:
+            window_size += 1
+
+        # subtract the rolling median (only for scouting)
+        baseline_trend: np.ndarray = medfilt(volume=detrended_signal, kernel_size=window_size)
+        scout_signal: np.ndarray = detrended_signal - baseline_trend
+
+        # extract zero-crossings by from dynamically centered scout signal
+        signs: np.ndarray = np.sign(scout_signal)
+        signs[signs == 0] = 1
+        zero_crossings: np.ndarray = np.where(np.diff(signs))[0]
+
+        scout_peaks: list = []
+        scout_valleys: list = []
 
         # only run if there are 2 or more zero_crossings (one period or more)
         if len(zero_crossings) >= 2:
