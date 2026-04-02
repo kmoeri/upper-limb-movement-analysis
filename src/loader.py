@@ -184,30 +184,30 @@ def load_participants(csv_file_paths: list) -> None:
         raw_landmarks: dict = load_landmarks_to_dict(csv_file_path)
 
         # 5) apply spatial transformation for 3D world coordinates (holistic upper limb model creation)
-        if not normalized:
-            # 5.1) shift the reference coordinate system origin from hip center to shoulder center
-            raw_landmarks = tb.shift_origin_to_shoulders(landmarks_dict=raw_landmarks,
-                                                         shoulder_name_l=pose_name_lst[11],
-                                                         shoulder_name_r=pose_name_lst[12])
-
-            # 5.2) snap the hand wrists to the pose wrists
-            # left
-            raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
-                                                  pose_wrist_name=pose_name_lst[15],
-                                                  hand_wrist_name=hand_name_lst[0],
-                                                  target_hand_landmarks=hand_name_lst[:21])
-            # right
-            raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
-                                                  pose_wrist_name=pose_name_lst[16],
-                                                  hand_wrist_name=hand_name_lst[21],
-                                                  target_hand_landmarks=hand_name_lst[21:])
+        # if not normalized:
+        #     # 5.1) shift the reference coordinate system origin from hip center to shoulder center
+        #     raw_landmarks = tb.shift_origin_to_shoulders(landmarks_dict=raw_landmarks,
+        #                                                  shoulder_name_l=pose_name_lst[11],
+        #                                                  shoulder_name_r=pose_name_lst[12])
+        #
+        #     # 5.2) snap the hand wrists to the pose wrists
+        #     # left
+        #     raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
+        #                                           pose_wrist_name=pose_name_lst[15],
+        #                                           hand_wrist_name=hand_name_lst[0],
+        #                                           target_hand_landmarks=hand_name_lst[:21])
+        #     # right
+        #     raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
+        #                                           pose_wrist_name=pose_name_lst[16],
+        #                                           hand_wrist_name=hand_name_lst[21],
+        #                                           target_hand_landmarks=hand_name_lst[21:])
 
         # raw dicts (pose and hands)
         raw_pose_landmarks: dict = {k: raw_landmarks[k] for k in pose_name_lst if k in raw_landmarks}
         raw_hand_landmarks: dict = {k: raw_landmarks[k] for k in hand_name_lst if k in raw_landmarks}
 
         # 6) preprocess raw data
-        processed_landmarks: dict = tb.filter_landmarks(raw_landmarks)
+        processed_landmarks: dict = tb.filter_landmarks_butter(raw_landmarks)
 
         if normalized:
             # correct for the aspect ratio in pixels
