@@ -765,23 +765,23 @@ class ToolBox:
                 """
 
             # landmark coordinates
-            wrist_lm: np.ndarray = lm_dict[lm_name_lst[0]]
-            index_lm: np.ndarray = lm_dict[lm_name_lst[1]]
-            pinky_lm: np.ndarray = lm_dict[lm_name_lst[2]]
+            wrist_lm: np.ndarray = np.array(lm_dict[lm_name_lst[0]])[:3, :].T
+            index_lm: np.ndarray = np.array(lm_dict[lm_name_lst[1]])[:3, :].T
+            pinky_lm: np.ndarray = np.array(lm_dict[lm_name_lst[2]])[:3, :].T
 
             # get the center between index and pinky knuckle to align the x vector with the axis of the hand
             midpoint: np.ndarray = 0.5 * (index_lm + pinky_lm)
 
             # local hand vectors with origin at wrist
             y_vec: np.ndarray = midpoint - wrist_lm
-            z_vec: np.ndarray = np.cross((index_lm - wrist_lm), (pinky_lm - wrist_lm))
+            z_vec: np.ndarray = np.cross((index_lm - wrist_lm), (pinky_lm - wrist_lm), axis=1)
 
             # align coordinate system depending on the current hand side
-            if lm_name_lst[0][-1] == '1': # left hand
+            if lm_name_lst[0][-1] == '1':   # left hand
                 z_vec = z_vec * (-1)
 
             # calculate the x_vector using the cross product of the other two vectors
-            x_vec: np.ndarray = np.cross(y_vec, z_vec)
+            x_vec: np.ndarray = np.cross(y_vec, z_vec, axis=1)
 
             # L2 norm / vector magnitude
             norm_x: np.ndarray = np.linalg.norm(x_vec, axis=1)
@@ -850,6 +850,73 @@ class ToolBox:
 
         return euler_angles
 
+    @staticmethod
+    def realign_hand_to_y_axis(landmark_dict: dict, side_idx: int) -> dict:
+        """
+        Translates the wrist to the origin (0,0,0) and rotates the hand so the wrist-to-middle-knuckle vector aligns
+        with the global y-axis [0, 1, 0].
+        This eliminates wrist orbiting and isolates pure roll for pronation/supination.
+
+        Args:
+            landmarks_dict (dict): Dictionary of 3D hand coordinates.
+            side_idx (int): Indication of the hand side that is passed (left: 1, right: 2)
+
+        Returns:
+            dict: Realigned 3D hand coordinates.
+        """
+
+        # identify the active side keys
+        wrist_key: str = f'wrist{side_idx}'
+        mcp_key: str = f'mcp{side_idx}3'
+
+        # return for missing the reference landmarks
+        if wrist_key not in landmark_dict or mcp_key not in landmark_dict:
+            return landmark_dict
+
+        # wrist coordinates
+        w = np.array(landmark_dict[wrist_key])[:3, :]
+
+        # translate wrist to origin [0, 0, 0]; default origin for MediaPipe is the center of the hands
+        translated = {k: np.array(v)[:3, :] - w for k, v in landmark_dict.items()}
+
+        # find the current y vector (wrist to mcp3)
+        y_vec = translated[mcp_key]
+        norm_y = np.linalg.norm(y_vec, axis=0)
+        norm_y[norm_y == 0] = 1e-8                  # avoid division by zero
+        y_norm = y_vec / norm_y
+
+        # vectorized Rodrigues' rotation formula
+        # target vector T = [0, 1, 0]^T.
+        # Axis of rotation A = y_norm x T = [y_z, 0, -y_x]^T
+        A_x = -y_norm[2, :]
+        A_y = np.zeros_like(A_x)
+        A_z = y_norm[0, :]
+        A = np.stack([A_x, A_y, A_z], axis=-1)   # shape [N, 3]
+
+        # cosine of angle is simply the y component of y_norm
+        c = y_norm[1, :]
+
+        # compute the Rodrigues scalar: 1 / (1 + cos(theta)); reshape to (N, 3) matrices
+        r_scalar = (1.0 / (1.0 + c + 1e-8))[:, np.newaxis]
+
+        # apply the rotation to every landmark
+        aligned_dict = {}
+        for k, P in translated.items():
+
+            # transpose P from (3, N) to (N, 3)
+            P_T = P.T
+
+            # cross products along the 3D axis
+            A_cross_P = np.cross(A, P_T, axis=-1)
+            A_cross_A_cross_P = np.cross(A, A_cross_P, axis=-1)
+
+            # v_rot = v + A x v + scalar * (A x (A x v))
+            P_rot_T = P_T + A_cross_P + (r_scalar * A_cross_A_cross_P)
+
+            # transpose back to (3, N)
+            aligned_dict[k] = P_rot_T.T
+
+        return aligned_dict
 
 def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
     """

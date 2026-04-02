@@ -23,8 +23,8 @@ class Exercise:
     tracker_type: str = 'mediapipe'                             # type of pose estimation and tracking
 
     # data storage
-    raw_pose_landmarks: dict                                    # tracked pose landmarks raw
-    raw_hand_landmarks: dict                                    # tracked hand landmarks raw
+    raw_pose_landmarks: dict = field(default_factory=dict)      # tracked pose landmarks raw
+    raw_hand_landmarks: dict = field(default_factory=dict)      # tracked hand landmarks raw
     clean_pose_landmarks: dict = field(default_factory=dict)    # preprocessed pose data (world: meters, normalized: px)
     clean_hand_landmarks: dict = field(default_factory=dict)    # preprocessed hand data (world: meters, normalized: px)
 
