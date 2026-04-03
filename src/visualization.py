@@ -522,10 +522,10 @@ class Visualizer:
         metrics_dict = dashboard_data.get('metrics', {})
         num_metrics = len(metrics_dict)
 
-        # Ensure skip_frames is at least 1 to prevent np.arange crash
+        # ensure skip_frames is at least 1 (skip_frames == 1: use every frame, skip_frames == 2: use every 2nd frame)
         skip_frames = max(1, skip_frames)
 
-        # Extract number of frames from whichever hand exists
+        # extract number of frames from whichever hand exists
         sample_lm = None
         if dashboard_data.get('right_hand'):
             sample_lm = list(dashboard_data['right_hand'].values())[0]
@@ -543,7 +543,7 @@ class Visualizer:
         fig = plt.figure(figsize=(16, 4 + (3 * num_metrics)))
         fig.suptitle('Kinematic Quality Control Dashboard', fontsize=16, fontweight='bold')
 
-        gs = gridspec.GridSpec(total_rows, 3, figure=fig, hspace=0.4, wspace=0.2)
+        gs = gridspec.GridSpec(total_rows, 3, figure=fig, hspace=0.2, wspace=0.2)
 
         # initialize 3D plots (top row): right hand (col 1), pose (col 2), left hand (col 3)
         ax_right = fig.add_subplot(gs[0, 0], projection='3d')
@@ -566,7 +566,10 @@ class Visualizer:
             ax.set_ylim([np.min(all_y) - pad, np.max(all_y) + pad])
             ax.set_zlim([np.min(all_z) - pad, np.max(all_z) + pad])
 
-            ax.invert_yaxis()  # MediaPipe's y-axis is positive-down
+            # invert axes to transform between MediaPipe and matplotlib coordinate systems
+            ax.invert_yaxis()       # MediaPipe's y-axis is positive-down
+            ax.invert_xaxis()       # x-axis mirrors the skeleton on the Y-Z plane
+
             ax.set_xticklabels([])
             ax.set_yticklabels([])
             ax.set_zticklabels([])
@@ -579,8 +582,8 @@ class Visualizer:
         right_color = '#2ca02c' if side_focus == 'R' else '#7f7f7f'
         left_color = '#2ca02c' if side_focus == 'L' else '#7f7f7f'
 
-        right_title = "Right Hand (Active)" if side_focus == 'R' else "Right Hand"
-        left_title = "Left Hand (Active)" if side_focus == 'L' else "Left Hand"
+        right_title = "Right Hand (Active)" if side_focus == 'R' else "Right Hand (Passive)"
+        left_title = "Left Hand (Active)" if side_focus == 'L' else "Left Hand (Passive)"
 
         # set up the three axes for each 3D animation plot
         pts_right = _setup_3d_axis(ax_right, right_title, dashboard_data.get('right_hand'), title_color=right_color)
@@ -597,27 +600,56 @@ class Visualizer:
 
         # initialize the 1D metric plots (bottom rows)
         tracker_lines = []
+        color_palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
 
         # run for each metric (can be only one or multiple)
-        for i, (m_title, (t_arr, sig_arr)) in enumerate(metrics_dict.items()):
+        for i, (m_title, (t_data, sig_data)) in enumerate(metrics_dict.items()):
             # span the metric's time series across all 3 columns
             ax_m = fig.add_subplot(gs[i + 1, :])
             ax_m.set_title(m_title, fontsize=10, fontweight='bold')
 
-            # plot the static signal
-            ax_m.plot(t_arr, sig_arr, color='black', lw=1.5)
-            ax_m.set_xlim((float(t_arr[0]), float(t_arr[-1])))
+            # if the data is a list, there are multiple time series -> overlap
+            if isinstance(t_data, list) and isinstance(t_data[0], (list, np.ndarray)):
+                min_x, max_x = float('inf'), float('-inf')
+
+                # loop through the multiple signals
+                for j in range(len(t_data)):
+                    t_arr = np.array(t_data[j])
+                    sig_arr = np.array(sig_data[j])
+
+                    c = color_palette[j % len(color_palette)]
+                    digit_label = f'Digit {j+2}'    # maps 0, 1, 2, 3 -> Digits 2, 3, 4, 5
+
+                    # plot the static signal
+                    ax_m.plot(t_arr, sig_arr, color=c, lw=1.5, alpha=0.8, label=digit_label)
+                    min_x = min(min_x, float(t_arr[0]))
+                    max_x = max(max_x, float(t_arr[-1]))
+
+                    if j == 0:
+                        # initialize a red vertical tracker line at position x = 0
+                        vline = ax_m.axvline(x=t_arr[0], color='red', lw=2, zorder=5)
+                        tracker_lines.append((vline, t_arr))
+
+                ax_m.set_xlim((min_x, max_x))
+                ax_m.legend(loc='upper right', fontsize=8)
+
+            else:
+                # single time series
+                t_arr = np.array(t_data)
+                sig_arr = np.array(sig_data)
+                ax_m.plot(t_arr, sig_arr, color='black', lw=1.5)
+                ax_m.set_xlim((float(t_arr[0]), float(t_arr[-1])))
+
+                vline = ax_m.axvline(x=t_arr[0], color='red', lw=2, zorder=5)
+                tracker_lines.append((vline, t_arr))
+
             ax_m.set_ylabel('Amplitude', fontsize=9)
             ax_m.grid(True, linestyle=':', alpha=0.6)
 
             if i == num_metrics - 1:
                 ax_m.set_xlabel('Time [s]', fontsize=10)
 
-            # initialize a red vertical tracker line at position x = 0
-            vline = ax_m.axvline(x=t_arr[0], color='red', lw=2, zorder=5)
-            tracker_lines.append((vline, t_arr))  # save tuple of line and its time array
-
-        plt.tight_layout()
+        #plt.tight_layout()
 
         # defines the update function
         def update(frame):

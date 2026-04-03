@@ -6,11 +6,11 @@ import os
 
 # modules
 from src.config import project_path
-from src.core import Participant
+from src.core import Participant, Exercise
 from src.visualization import Visualizer
 
 
-def _prepare_dashboard_data(exercise) -> dict:
+def _prepare_dashboard_data(exercise: Exercise) -> dict:
     """
     Extracts the 3D landmarks of hands and pose including the 1D metrics for the dashboard.
     Returns a dictionary comprising the items necessary for rendering the dashboard:
@@ -26,7 +26,7 @@ def _prepare_dashboard_data(exercise) -> dict:
         'elbow_left', 'elbow_right',
         'wrist_left', 'wrist_right'
     ]
-    filtered_pose = {k: v for k, v in exercise.raw_pose_landmarks.items() if k in desired_pose_lms}
+    filtered_pose = {k: v for k, v in exercise.clean_pose_landmarks.items() if k in desired_pose_lms}
 
     # helper function to find the first digit in the landmark name (e.g., 'ftip15' -> returns '1')
     def get_hand_id(key_str):
@@ -36,14 +36,18 @@ def _prepare_dashboard_data(exercise) -> dict:
         return None
 
     # split the hands landmark dictionary using the left-right coding convention (1: Left, 2: Right)
-    left_hand_lm: dict = {k: v for k, v in exercise.raw_hand_landmarks.items() if get_hand_id(k) == '1'}
-    right_hand_lm: dict = {k: v for k, v in exercise.raw_hand_landmarks.items() if get_hand_id(k) == '2'}
+    left_hand_lm: dict = {k: v for k, v in
+                          getattr(exercise, 'aligned_hand_landmarks', exercise.clean_hand_landmarks).items() if
+                          get_hand_id(k) == '1'}
+    right_hand_lm: dict = {k: v for k, v in
+                           getattr(exercise, 'aligned_hand_landmarks', exercise.clean_hand_landmarks).items() if
+                           get_hand_id(k) == '2'}
 
     # create dashboard data dict template
-    dashboard_data: dict = {'pose': exercise.raw_pose_landmarks,
+    dashboard_data: dict = {'pose': filtered_pose,
                             'left_hand': left_hand_lm,
                             'right_hand': right_hand_lm,
-                            'metrics': {}  # {'ExerciseName': (time_array, signal_array)}
+                            'metrics': {}                   # {'ExerciseName': (time_array, signal_array)}
                             }
 
     # associate hand side to active/passive based on the exercise focus
@@ -85,6 +89,28 @@ def _prepare_dashboard_data(exercise) -> dict:
     return dashboard_data
 
 
+def _render_single_exercise(exercise: Exercise, pid: str, visit_id: str, ex_key: str, viz=None) -> None:
+
+    if viz is None:
+        viz = Visualizer()
+
+    try:
+        # get data for dashboard
+        dashboard_data = _prepare_dashboard_data(exercise)
+
+        # if no metrics were found (e.g., extraction failed) -> skip plotting
+        if not dashboard_data.get('metrics'):
+            print(f"Skipping {ex_key} for {pid}...: No metrics found")
+            return
+
+        # render the dashboard
+        viz.viz_render_dashboard(dashboard_data, pid, visit_id, ex_key, exercise.side_focus, skip_frames=2)
+        print(f"Successfully queued data for {ex_key}")
+
+    except Exception as e:
+        print(f"Error processing {ex_key} for {pid}: {e}")
+
+
 def check_kinematics():
 
     # initialize Visualizer object
@@ -101,22 +127,9 @@ def check_kinematics():
 
         # loop through every exercise this participant performed
         for ex_key, ex in p.exercises.items():
-            try:
-                # get data for dashboard
-                dashboard_data = _prepare_dashboard_data(ex)
 
-                # if no metrics were found (e.g., extraction failed) -> skip plotting
-                if not dashboard_data['metrics']:
-                    print(f"Skipping {ex_key} for {p.pid}...: No metrics found")
-                    continue
-
-                # render the dashboard
-                viz.viz_render_dashboard(dashboard_data, p.pid, p.visit_id, ex_key, ex.side_focus, skip_frames=2)
-
-                print(f"Successfully queued data for {ex_key}")
-
-            except Exception as e:
-                print(f"Error processing {ex_key} for {p.pid}: {e}")
+            # render single exercise
+            _render_single_exercise(ex, p.pid, p.visit_id, ex_key, viz)
 
 
 if __name__ == '__main__':
