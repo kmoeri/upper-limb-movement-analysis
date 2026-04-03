@@ -430,3 +430,33 @@ class KinematicFeatures:
         features['time_axis'] = np.arange(len(detrended_signal)) / self.fps
 
         return features
+
+    def calc_flexion_angle(self, seg_vec_1: np.ndarray, seg_vec_2: np.ndarray) -> np.ndarray:
+        """
+        Calculates the interior flexion angle between two segments.
+        Returns the angle in degrees (0.0: perfectly straight, 90.0: right angle flex).
+
+        Args:
+            seg_vec_1 (np.ndarray): Vector of 1st body segment
+            seg_vec_2 (np.ndarray): Vector of 2nd body segment
+
+        Returns:
+            flexion_angle (np.ndarray): Interior flexion angle.
+        """
+
+        norm_v1: np.ndarray = np.linalg.norm(seg_vec_1, axis=1)
+        norm_v2: np.ndarray = np.linalg.norm(seg_vec_2, axis=1)
+
+        # avoid division by zero
+        norm_v1[norm_v1 == 0] = 1e-8
+        norm_v2[norm_v2 == 0] = 1e-8
+
+        seg_vec_1_u: np.ndarray = seg_vec_1 / norm_v1[:, np.newaxis]
+        seg_vec_2_u: np.ndarray = seg_vec_2 / norm_v2[:, np.newaxis]
+
+        dot_product: np.ndarray = np.sum(seg_vec_1_u * seg_vec_2_u, axis=1)
+
+        # clip to avoid NaN floating point inaccuracies
+        flexion_angle: np.ndarray = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
+
+        return flexion_angle

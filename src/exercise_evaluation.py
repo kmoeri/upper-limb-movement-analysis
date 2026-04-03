@@ -1,4 +1,4 @@
-# src/analyze.py
+# src/exercise_evaluation.py
 import pydoc
 
 # libraries
@@ -90,6 +90,36 @@ class ExerciseEvaluator:
 
         return performance_dict
 
+    def _align_hands(self, exercise: Exercise) -> None:
+
+        # helper function to find the first digit in the landmark name (first digit distinguishes left and right)
+        def get_hand_id(key_str: str) -> str:
+            for char in key_str:
+                if char.isdigit():
+                    return char
+            return None
+
+        # split hands into left and right
+        left_hand_dict: dict = {k: v for k, v in exercise.clean_hand_landmarks.items() if get_hand_id(k) == '1'}
+        right_hand_dict: dict = {k: v for k, v in exercise.clean_hand_landmarks.items() if get_hand_id(k) == '2'}
+
+        aligned_hands: dict = {}
+
+        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
+            # align left hand
+            if left_hand_dict:
+                aligned_left: dict = self.tb.realign_hand_to_y_axis(left_hand_dict, side_idx=1)
+                aligned_hands.update(aligned_left)
+            if right_hand_dict:
+                aligned_right: dict = self.tb.realign_hand_to_y_axis(right_hand_dict, side_idx=2)
+                aligned_hands.update(aligned_right)
+        else:
+            # trust global coordinates (for non MediaPipe data)
+            aligned_hands = exercise.clean_hand_landmarks.copy()
+
+        # save aligned hands to the corresponding Exercise attribute
+        exercise.aligned_hand_landmarks = aligned_hands
+
     def analyze_finger_tapping(self, exercise: Exercise, p_id: str, p_hand_size: float, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
@@ -110,16 +140,24 @@ class ExerciseEvaluator:
         wrist_key: str = f'wrist{active_side_idx}'
         mcp_key: str = f'mcp{active_side_idx}3'         # left: mcp13, right: mcp23
 
+        # get aligned hands
+        if not getattr(exercise, 'aligned_hand_landmarks', None):
+            self._align_hands(exercise)
+
+        # safety check for missing hand
+        if wrist_key not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
+            raise ValueError(f"Active hand landmarks ({wrist_key}, {mcp_key}) not detected.")
+
         # calculate the frame-by-frame dynamic palm length (cancel MediaPipe scale jitter)
         if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.clean_hand_landmarks[wrist_key],
-                                                                       exercise.clean_hand_landmarks[mcp_key])
+            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.aligned_hand_landmarks[wrist_key],
+                                                                       exercise.aligned_hand_landmarks[mcp_key])
         else:
             # pose estimation data other than MediaPipe does not apply this dynamic smoothing
-            dynamic_palm_arr: np.ndarray = np.full(len(exercise.clean_hand_landmarks[wrist_key][0]), 1.0)
+            dynamic_palm_arr: np.ndarray = np.full(len(exercise.aligned_hand_landmarks[wrist_key][0]), 1.0)
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks,
+        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
                                                                          dynamic_palm_arr,  # for peak detection
                                                                          p_hand_size,       # for feature scaling
                                                                          anchor,
@@ -163,7 +201,7 @@ class ExerciseEvaluator:
         passive_fingers: list = lm_corr_names[2:]
 
         # calculate Euclidean distance for passive fingers
-        passive_kinematics: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks,
+        passive_kinematics: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
                                                                            dynamic_palm_arr,
                                                                            p_hand_size,
                                                                            wrist_key,
@@ -244,7 +282,6 @@ class ExerciseEvaluator:
         lm_corr_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names]
         thumb = lm_corr_names[0]
         finger_names = lm_corr_names[1:]
-        pair_key: str = f'{thumb}-{finger_names}'
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['ftap_alter'].get('peak_cfg', self.peak_cfg)
@@ -253,14 +290,22 @@ class ExerciseEvaluator:
         wrist_key: str = f'wrist{active_side_idx}'
         mcp_key: str = f'mcp{active_side_idx}3'
 
+        # get aligned hands
+        if not getattr(exercise, 'aligned_hand_landmarks', None):
+            self._align_hands(exercise)
+
+        # safety check
+        if wrist_key not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
+            raise ValueError(f"Active hand landmarks ({wrist_key}, {mcp_key}) not detected.")
+
         if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.clean_hand_landmarks[wrist_key],
-                                                                       exercise.clean_hand_landmarks[mcp_key])
+            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.aligned_hand_landmarks[wrist_key],
+                                                                       exercise.aligned_hand_landmarks[mcp_key])
         else:
-            dynamic_palm_arr: np.ndarray = np.full(len(exercise.clean_hand_landmarks[wrist_key][0]), 1.0)
+            dynamic_palm_arr: np.ndarray = np.full(len(exercise.aligned_hand_landmarks[wrist_key][0]), 1.0)
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks,
+        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
                                                                          dynamic_palm_arr,
                                                                          p_hand_size,
                                                                          thumb,
@@ -373,6 +418,14 @@ class ExerciseEvaluator:
         # isolation score: The average variance of all non-active fingers across all taps (lower: better isolation)
         isolation_score: float = float(np.mean(isolation_variances)) if isolation_variances else 0.0
 
+        # extract all four time series (from each finger pair)
+        alt_tap_y: list = []
+        alt_tap_x: list = []
+        for fn in finger_names:
+            p_feat = active_dist_dict[f'{thumb}-{fn}']['features']
+            alt_tap_y.append(p_feat.get('signal_detrended', []))
+            alt_tap_x.append(p_feat.get('time_axis', []))
+
         # 2) extract general metrics (e.g., task impairment by spectrogram)
 
         # 3) associated reactions (passive hand movement -> mirror movement)
@@ -387,7 +440,8 @@ class ExerciseEvaluator:
         # add exercise specific prefix-key 'alt_tap'
         results = {
             # time series
-
+            'alt_tap_time_series_y': alt_tap_y,
+            'alt_tap_time_series_x': alt_tap_x,
             # general kinematic features
             'alt_tap_rep_num': performance_features.get('repetition_num', 0.0),
             'alt_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
@@ -431,40 +485,116 @@ class ExerciseEvaluator:
         # DATA PREPARATION: dynamic normalization
         mcp_key: str = f'mcp{active_side_idx}3'
 
-        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.clean_hand_landmarks[wrist_name],
-                                                                       exercise.clean_hand_landmarks[mcp_key])
-        else:
-            dynamic_palm_arr: np.ndarray = np.full(len(exercise.clean_hand_landmarks[wrist_name][0]), 1.0)
+        # get aligned hands
+        if not getattr(exercise, 'aligned_hand_landmarks', None):
+            self._align_hands(exercise)
+
+        # safety check
+        if wrist_name not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
+            raise ValueError(f"Active hand landmarks ({wrist_name}, {mcp_key}) not detected.")
+
+        active_dist_dict: dict = {}
+        finger_digits = ['2', '3', '4', '5']        # index, middle, ring, pinky
+
+        # extract the 3D coordinates for all joints
+        for digit in finger_digits:
+            wrist_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[wrist_name])
+            mcp_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'mcp{active_side_idx}{digit}'])
+            pip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'pip{active_side_idx}{digit}'])
+            dip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'dip{active_side_idx}{digit}'])
+            ftip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'ftip{active_side_idx}{digit}'])
+
+        # calculate the total kinematic chain ratio (KCR)
+
+        # direct distance from fingertip landmarks to the wrist landmark
+        direct_ftip_wrist: np.ndarray = np.linalg.norm(ftip_arr - wrist_arr, axis=1)
+
+        # distance measured by the sum of each segment - reference length for each frame
+        segment_sum: np.ndarray = (np.linalg.norm(mcp_arr - wrist_arr, axis=1) +
+                                   np.linalg.norm(pip_arr - mcp_arr, axis=1) +
+                                   np.linalg.norm(dip_arr - pip_arr, axis=1) +
+                                   np.linalg.norm(ftip_arr - dip_arr, axis=1))
+
+        # clipping the KCR to the range 0.0-1.0 prevents values > 1.0 due to noise or hyperextension
+        kcr_arr: np.ndarray = np.clip(direct_ftip_wrist / np.clip(segment_sum, 1e-8, None), 0.0, 1.0)
+
+        # calculate the angle composite score
+
+        # get segment vectors from segement coordinates
+        vec_mw: np.ndarray = mcp_arr - wrist_arr
+        vec_pm: np.ndarray = pip_arr - mcp_arr
+        vec_dp: np.ndarray = dip_arr - pip_arr
+        vec_fd: np.ndarray = ftip_arr - dip_arr
+
+        # get flexion angle of each finger joint
+        mcp_flex: np.ndarray = self.kf.calc_flexion_angle(vec_mw, vec_pm)
+        pip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_pm, vec_dp)
+        dip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_dp, vec_fd)
+
+        # normalize flexion angles to 0-1 (1.0: perfectly extended, 0.0: max flexion)
+        score_mcp = 1.0 - np.clip(mcp_flex / config['open_close'].get('mcp_flex', 90.0), 0, 1)
+        score_pip = 1.0 - np.clip(pip_flex / config['open_close'].get('pip_flex', 100.0), 0, 1)
+        score_dip = 1.0 - np.clip(dip_flex / config['open_close'].get('dip_flex', 80.0), 0, 1)
+        angle_score_arr = (score_mcp + score_pip + score_dip) / 3.0
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.clean_hand_landmarks,
-                                                                         dynamic_palm_arr,
-                                                                         p_hand_size,
-                                                                         wrist_name,
-                                                                         finger_names,
-                                                                         ex_peak_cfg)
+        feature_dict: dict = self.kf.calc_kinematic_parameters(kcr_arr, ex_peak_cfg)
+
+        valid_peaks = feature_dict.get('valid_peaks_idx', [])
+        if len(valid_peaks) > 0:
+            peak_amps = kcr_arr[valid_peaks]
+            feature_dict['amplitude_mean'] = float(np.mean(peak_amps))
+            feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amps, 90))
+            amp_mean = feature_dict['amplitude_mean']
+            feature_dict['amplitude_cov'] = float((np.std(peak_amps) / amp_mean) * 100) if amp_mean > 0 else 0.0
+
+        finger_key = f'{wrist_name}-ftip{active_side_idx}{digit}'
+        active_dist_dict[finger_key] = {
+            'normalized_distance': kcr_arr,
+            'angle_score': angle_score_arr,
+            'features': feature_dict
+        }
 
         # 1.2) correctness of opening & closing (completeness of movement)
 
-        # get all peak and valley amplitudes
-        all_peak_amps: list = []
-        all_valley_amps: list = []
+        # get all peak and valley kcr and angle values
+        all_peak_kcr: list = []
+        all_peak_ang: list = []
+        all_valley_kcr: list = []
+        all_valley_ang: list = []
+
         for finger_id in active_dist_dict.keys():
-            dist_arr = active_dist_dict[finger_id]['normalized_distance']
+            kcr = active_dist_dict[finger_id]['normalized_distance']
+            ang = active_dist_dict[finger_id]['angle_score']
             peaks = active_dist_dict[finger_id]['features']['valid_peaks_idx']
             valleys = active_dist_dict[finger_id]['features']['valid_valleys_idx']
 
-            all_peak_amps.extend(dist_arr[peaks])
-            all_valley_amps.extend(dist_arr[valleys])
+            all_peak_kcr.extend(kcr[peaks])
+            all_peak_ang.extend(ang[peaks])
+            all_valley_kcr.extend(kcr[valleys])
+            all_valley_ang.extend(ang[valleys])
 
-        # get config thresholds for valid opening and closing
-        open_thresh = config['open_close'].get('hand_opening_thresh', 0.8)
-        close_thresh = config['open_close'].get('hand_closing_thresh', 0.2)
+        # extension score (hand open)
+        if all_peak_kcr:
+            ext_kcr_score: float = np.mean(all_peak_kcr) * 100.0
+            ext_ang_score: float = np.mean(all_peak_ang) * 100.0
+            extension_score: float = (ext_kcr_score + ext_ang_score) / 2.0
+        else:
+            extension_score: float = 0.0
 
-        # calculate opening (extension) and closing (flexion) scores
-        extension_score = (np.sum(np.array(all_peak_amps) > open_thresh) / len(all_peak_amps) * 100) if all_peak_amps else 0.0
-        flexion_score = (np.sum(np.array(all_valley_amps) < close_thresh) / len(all_valley_amps) * 100) if all_valley_amps else 0.0
+        # flexion score (hand closed)
+        if all_valley_kcr:
+            # map KCR to 100% (assumption: 0.25 is a perfectly tight fist) <- this value may require tuning in config
+            min_dist_kcr: float = config['open_close'].get('fist_min_dist', 0.25)
+            kcr_mapped: np.ndarray = np.clip(1.0 - (np.array(all_valley_kcr) - min_dist_kcr) / (1.0 - min_dist_kcr), 0.0, 1.0)
+            flex_kcr_score: float = float(np.mean(flex_kcr_score) * 100.0)
+
+            # angle score 0.0 is perfect flexion -> map to 100%
+            ang_mapped: np.ndarray = np.clip(1.0 - np.array(all_valley_ang), 0.0, 1.0)
+            flex_ang_score: float = float(np.mean(ang_mapped) * 100.0)
+            flexion_score: float = (flex_kcr_score + flex_ang_score) / 2.0
+        else:
+            flexion_score: float = 0.0
 
         # 1.3) quality: temporal dispersion
         dispersion_variances = []
@@ -564,13 +694,17 @@ class ExerciseEvaluator:
 
         # perform skeleton alignment to extract pure roll rotation
         active_side_str = str(active_side_idx)
-        active_hand_dict: dict = {k: v for k, v in exercise.clean_hand_landmarks.items() if active_side_str in k}
-        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            # mathematically pin the wrist so that pitch and yaw are locked
-            analysis_landmarks = self.tb.realign_hand_to_y_axis(active_hand_dict, active_side_idx)
-        else:
-            # trust global coordinates
-            analysis_landmarks = active_hand_dict
+
+        # get aligned hands
+        if not getattr(exercise, 'aligned_hand_landmarks', None):
+            self._align_hands(exercise)
+
+        # safety check
+        for lm in ref_landmark_names:
+            if lm not in exercise.aligned_hand_landmarks:
+                raise ValueError(f'Required landmark {lm} not detected in aligned hands.')
+
+        analysis_landmarks: dict = {k: v for k, v in exercise.aligned_hand_landmarks.items() if active_side_str in k}
 
         # calculate the rotational angles for the stabalized hand
         euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(analysis_landmarks, ref_landmark_names)
