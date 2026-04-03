@@ -496,64 +496,76 @@ class ExerciseEvaluator:
         active_dist_dict: dict = {}
         finger_digits = ['2', '3', '4', '5']        # index, middle, ring, pinky
 
-        # extract the 3D coordinates for all joints
+        def _to_nx3(lm_lst: list):
+            arr: np.ndarray = np.array(lm_lst)
+            if arr.shape[0] == 3 and arr.shape[1] > 3:
+                return arr.T
+            return arr
+
+        # extract the 3D coordinates for all joints - transpose arrays from (3, N) to (N, 3)
         for digit in finger_digits:
-            wrist_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[wrist_name])
-            mcp_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'mcp{active_side_idx}{digit}'])
-            pip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'pip{active_side_idx}{digit}'])
-            dip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'dip{active_side_idx}{digit}'])
-            ftip_arr: np.ndarray = np.array(exercise.aligned_hand_landmarks[f'ftip{active_side_idx}{digit}'])
+            lm_wrist = exercise.aligned_hand_landmarks[wrist_name]
+            lm_mcp = exercise.aligned_hand_landmarks[f'mcp{active_side_idx}{digit}']
+            lm_pip = exercise.aligned_hand_landmarks[f'pip{active_side_idx}{digit}']
+            lm_dip = exercise.aligned_hand_landmarks[f'dip{active_side_idx}{digit}']
+            lm_ftip = exercise.aligned_hand_landmarks[f'ftip{active_side_idx}{digit}']
 
-        # calculate the total kinematic chain ratio (KCR)
+            # calculate the total kinematic chain ratio (KCR)
 
-        # direct distance from fingertip landmarks to the wrist landmark
-        direct_ftip_wrist: np.ndarray = np.linalg.norm(ftip_arr - wrist_arr, axis=1)
+            # direct distance from fingertip landmarks to the wrist landmark
+            dist_ftip_wrist = self.tb.calc_euclidean_dist(lm_ftip, lm_wrist)
 
-        # distance measured by the sum of each segment - reference length for each frame
-        segment_sum: np.ndarray = (np.linalg.norm(mcp_arr - wrist_arr, axis=1) +
-                                   np.linalg.norm(pip_arr - mcp_arr, axis=1) +
-                                   np.linalg.norm(dip_arr - pip_arr, axis=1) +
-                                   np.linalg.norm(ftip_arr - dip_arr, axis=1))
+            # distance measured by the sum of each segment - reference length for each frame
+            sum_segments = (self.tb.calc_euclidean_dist(lm_mcp, lm_wrist) +
+                            self.tb.calc_euclidean_dist(lm_pip, lm_mcp) +
+                            self.tb.calc_euclidean_dist(lm_dip, lm_pip) +
+                            self.tb.calc_euclidean_dist(lm_ftip, lm_dip))
 
-        # clipping the KCR to the range 0.0-1.0 prevents values > 1.0 due to noise or hyperextension
-        kcr_arr: np.ndarray = np.clip(direct_ftip_wrist / np.clip(segment_sum, 1e-8, None), 0.0, 1.0)
+            # clipping the KCR to the range 0.0-1.0 prevents values > 1.0 due to noise or hyperextension
+            kcr_arr: np.ndarray = np.clip(dist_ftip_wrist / np.clip(sum_segments, 1e-8, None), 0.0, 1.0)
 
-        # calculate the angle composite score
+            # calculate the angle composite score
 
-        # get segment vectors from segement coordinates
-        vec_mw: np.ndarray = mcp_arr - wrist_arr
-        vec_pm: np.ndarray = pip_arr - mcp_arr
-        vec_dp: np.ndarray = dip_arr - pip_arr
-        vec_fd: np.ndarray = ftip_arr - dip_arr
+            wrist_arr: np.ndarray = _to_nx3(lm_wrist)
+            mcp_arr: np.ndarray = _to_nx3(lm_mcp)
+            pip_arr: np.ndarray = _to_nx3(lm_dip)
+            dip_arr: np.ndarray = _to_nx3(lm_dip)
+            ftip_arr: np.ndarray = _to_nx3(lm_ftip)
 
-        # get flexion angle of each finger joint
-        mcp_flex: np.ndarray = self.kf.calc_flexion_angle(vec_mw, vec_pm)
-        pip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_pm, vec_dp)
-        dip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_dp, vec_fd)
+            # get segment vectors from segement coordinates
+            vec_mw: np.ndarray = mcp_arr - wrist_arr
+            vec_pm: np.ndarray = pip_arr - mcp_arr
+            vec_dp: np.ndarray = dip_arr - pip_arr
+            vec_fd: np.ndarray = ftip_arr - dip_arr
 
-        # normalize flexion angles to 0-1 (1.0: perfectly extended, 0.0: max flexion)
-        score_mcp = 1.0 - np.clip(mcp_flex / config['open_close'].get('mcp_flex', 90.0), 0, 1)
-        score_pip = 1.0 - np.clip(pip_flex / config['open_close'].get('pip_flex', 100.0), 0, 1)
-        score_dip = 1.0 - np.clip(dip_flex / config['open_close'].get('dip_flex', 80.0), 0, 1)
-        angle_score_arr = (score_mcp + score_pip + score_dip) / 3.0
+            # get flexion angle of each finger joint
+            mcp_flex: np.ndarray = self.kf.calc_flexion_angle(vec_mw, vec_pm)
+            pip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_pm, vec_dp)
+            dip_flex: np.ndarray = self.kf.calc_flexion_angle(vec_dp, vec_fd)
 
-        # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        feature_dict: dict = self.kf.calc_kinematic_parameters(kcr_arr, ex_peak_cfg)
+            # normalize flexion angles to 0-1 (1.0: perfectly extended, 0.0: max flexion)
+            score_mcp = 1.0 - np.clip(mcp_flex / config['open_close'].get('mcp_flex', 90.0), 0, 1)
+            score_pip = 1.0 - np.clip(pip_flex / config['open_close'].get('pip_flex', 100.0), 0, 1)
+            score_dip = 1.0 - np.clip(dip_flex / config['open_close'].get('dip_flex', 80.0), 0, 1)
+            angle_score_arr = (score_mcp + score_pip + score_dip) / 3.0
 
-        valid_peaks = feature_dict.get('valid_peaks_idx', [])
-        if len(valid_peaks) > 0:
-            peak_amps = kcr_arr[valid_peaks]
-            feature_dict['amplitude_mean'] = float(np.mean(peak_amps))
-            feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amps, 90))
-            amp_mean = feature_dict['amplitude_mean']
-            feature_dict['amplitude_cov'] = float((np.std(peak_amps) / amp_mean) * 100) if amp_mean > 0 else 0.0
+            # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
+            feature_dict: dict = self.kf.calc_kinematic_parameters(kcr_arr, ex_peak_cfg)
 
-        finger_key = f'{wrist_name}-ftip{active_side_idx}{digit}'
-        active_dist_dict[finger_key] = {
-            'normalized_distance': kcr_arr,
-            'angle_score': angle_score_arr,
-            'features': feature_dict
-        }
+            valid_peaks = feature_dict.get('valid_peaks_idx', [])
+            if len(valid_peaks) > 0:
+                peak_amps = kcr_arr[valid_peaks]
+                feature_dict['amplitude_mean'] = float(np.mean(peak_amps))
+                feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amps, 90))
+                amp_mean = feature_dict['amplitude_mean']
+                feature_dict['amplitude_cov'] = float((np.std(peak_amps) / amp_mean) * 100) if amp_mean > 0 else 0.0
+
+            finger_key = f'{wrist_name}-ftip{active_side_idx}{digit}'
+            active_dist_dict[finger_key] = {
+                'normalized_distance': kcr_arr,
+                'angle_score': angle_score_arr,
+                'features': feature_dict
+            }
 
         # 1.2) correctness of opening & closing (completeness of movement)
 
@@ -587,7 +599,7 @@ class ExerciseEvaluator:
             # map KCR to 100% (assumption: 0.25 is a perfectly tight fist) <- this value may require tuning in config
             min_dist_kcr: float = config['open_close'].get('fist_min_dist', 0.25)
             kcr_mapped: np.ndarray = np.clip(1.0 - (np.array(all_valley_kcr) - min_dist_kcr) / (1.0 - min_dist_kcr), 0.0, 1.0)
-            flex_kcr_score: float = float(np.mean(flex_kcr_score) * 100.0)
+            flex_kcr_score: float = float(np.mean(kcr_mapped) * 100.0)
 
             # angle score 0.0 is perfect flexion -> map to 100%
             ang_mapped: np.ndarray = np.clip(1.0 - np.array(all_valley_ang), 0.0, 1.0)
