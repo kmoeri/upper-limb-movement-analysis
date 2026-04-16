@@ -7,7 +7,7 @@ import numpy as np
 
 # modules
 from src.config import config, project_path
-from src.core import Participant
+from src.core import Participant, Exercise
 from src.exercise_evaluation import ExerciseEvaluator
 from src.utils import save_extracted_data_to_csv
 

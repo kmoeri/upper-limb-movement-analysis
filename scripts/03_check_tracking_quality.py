@@ -279,7 +279,7 @@ def get_lmm_consistency_statistics(hand_df: pd.DataFrame, results_dir: str, body
 
     # categorical ordering to make the 'Passive' Role and 'Healthy' Condition the baselines
     # pd.Categorical assigns values '0' and '1' to 'Passive' (0) and Active (1), and to 'Healthy' (0) and 'Affected' (1)
-    # crucial for the model to correctly interpret the baseline ('Passive' and 'Healthy'
+    # crucial for the model to correctly interpret the baseline ('Passive' and 'Healthy')
     lmm_df['Hand_Role'] = pd.Categorical(lmm_df['Hand_Role'], categories=['Passive', 'Active'], ordered=True)
     lmm_df['Hand_Condition'] = pd.Categorical(lmm_df['Hand_Condition'], categories=['Healthy', 'Affected'], ordered=True)
 
