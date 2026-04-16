@@ -27,8 +27,10 @@ class Exercise:
     raw_hand_landmarks: dict = field(default_factory=dict)      # tracked hand landmarks raw
     clean_pose_landmarks: dict = field(default_factory=dict)    # preprocessed pose data (world: meters, normalized: px)
     clean_hand_landmarks: dict = field(default_factory=dict)    # preprocessed hand data (world: meters, normalized: px)
+    aligned_hand_landmarks: dict = field(default_factory=dict)  # aligned hand data (world: meters, normalized: px)
 
     metrics: dict = field(default_factory=dict)                 # stores results
+
 
 class Participant:
     """
