@@ -145,116 +145,157 @@ class ToolBox:
 
         return clean_signal
 
-    # Hampel & Butterworth (4th order)
-    def filter_landmarks_butter(self, landmarks_dict: dict) -> dict:
+    @staticmethod
+    def get_kinematic_chain() -> dict:
+
+        chain: dict = {'shoulder1': ('shoulder1', 'elbow1'),
+                       'elbow1': ('elbow1', 'wrist1'),
+                       'wrist1': ('wrist1', 'mcp13'),
+                       'hip1': ('hip1', 'knee1'),
+                       'knee1': ('knee1', 'ankle1'),
+                       'shoulder2': ('shoulder2', 'elbow2'),
+                       'elbow2': ('elbow2', 'wrist2'),
+                       'wrist2': ('wrist2', 'mcp23'),
+                       'hip2': ('hip2', 'knee2'),
+                       'knee2': ('knee2', 'ankle2')}
+
+        # adding all finger connections dynamically
+        for link in config['body_parts']['hands_link_lst']:
+            parent, child = link[0], link[1]
+            # ensure that: 1) one of the defined hand prefix, 2) same finger digit, 3) name longer than 2 characters
+            if parent.startswith(('cmc', 'mcp', 'pip', 'dip', 'ip')) and parent[-2:] == child[-2:] and len(parent) > 2:
+                chain[parent] = (parent, child)
+
+        return chain
+
+    @staticmethod
+    def apply_delta_rotation(vec_raw: np.ndarray, vec_clean: np.ndarray, rot_raw: np.ndarray) -> np.ndarray:
+        """Calculates the minimal delta rotation necessary to reposition the old landmarks onto the new landmarks."""
+        vec_raw_u: np.ndarray = vec_raw / np.linalg.norm(vec_raw, axis=1, keepdims=True)
+        vec_clean_u: np.ndarray = vec_clean / np.linalg.norm(vec_clean, axis=1, keepdims=True)
+
+        rot_axis: np.ndarray = np.cross(vec_raw_u, vec_clean_u)
+        axis_norm: np.ndarray = np.linalg.norm(rot_axis, axis=1, keepdims=True)
+
+        valid_mask: np.ndarray = (axis_norm > 1e-8).flatten()
+        rot_axis[valid_mask] = rot_axis[valid_mask] / axis_norm[valid_mask]
+
+        dot_prod: np.ndarray = np.sum(vec_raw_u * vec_clean_u, axis=1)
+        rot_angle = np.arccos(np.clip(dot_prod, -1.0, 1.0))
+
+        rot_vecs = np.zeros_like(rot_axis)
+        rot_vecs[valid_mask] = rot_axis[valid_mask] * rot_angle[valid_mask, np.newaxis]
+
+        r_delta = Rotation.from_rotvec(rot_vecs).as_matrix()
+        r_clean = np.einsum('fij,fjk->fik', r_delta, rot_raw)
+
+        return r_clean
+
+    def filter_landmark_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Preprocess ndarray time series of landmark data in two distinct stages:
-        - Hampel: detects outliers (large jumps) and replaces them with a local median.
-        - Butterworth: applies a zero-lag, 4th-order low-pass filter to cleanly remove high-frequency jitter.
+        Preprocess landmark data in three stages:
+        1) Interpolation
+        2) Hampel: detects outliers (large jumps) and replaces them with a local median.
+        3) Butterworth: applies a zero-lag, 4th-order low-pass filter to cleanly remove high-frequency jitter.
 
         Args:
-            landmarks_dict (dict): Dictionary of raw landmarks (3D coordinates).
+            df (pd.DataFrame): Pandas dataframe of raw landmarks (3D coordinates and rotation matrices).
 
         Returns:
-            filtered_landmarks (dict): Dictionary containing the processed motion data.
+            clean_df (pd.DataFrame): Pandas dataframe comprising the filtered landmark data.
         """
 
         # configurations
         MAX_GAP_THRESHOLD: int = config['preprocessing']['max_gap_threshold']
-        FS: float = self.fps
         CUTOFF_FREQ: float = config['preprocessing'].get('butter_cutoff_freq', 10.0)
         BUTTER_ORDER: int = config['preprocessing'].get('butter_order', 4)
+        HAMPEL_WINDOW: int = config['preprocessing'].get('hampel_window_size', 4)
+        HAMPEL_SIGMA: float = config['preprocessing'].get('hampel_n_sigma', 2.0)
 
-        def _max_repeated_nan(arr: np.ndarray) -> int:
-            """
-            Calculates the maximum gap (number of consecutive) NaN values in an array.
+        clean_df: pd.DataFrame = df.copy()
 
-            Args:
-                arr (np.ndarray): 1D array.
+        # 1) isolate and filter coordinate columns
+        coord_cols: list[str] = [col for col in clean_df.columns if col.endswith(('_x', '_y', '_z'))]
+        base_names: list[str] = list(set([col[:-2] for col in coord_cols]))
 
-            Returns:
-                gap (int): maximum count of consecutive nans.
-            """
-            mask = np.concatenate(([False], np.isnan(arr), [False]))
-            if ~mask.any():
-                return 0
-            else:
-                idx = np.nonzero(mask[1:] != mask[:-1])[0]
-                gap: int = (idx[1::2] - idx[::2]).max()
-                return gap
+        valid_cols = []
 
-        def _butterworth_lowpass(data_arr: np.ndarray, cutoff: float, fs: float, order: int) -> np.ndarray:
-            """
-            Applies a zero-phase Butterworth lowpass filter.
+        # check for gaps and skip invalid landmarks
+        for lm in base_names:
+            cols = [f"{lm}_x", f"{lm}_y", f"{lm}_z"]
+            is_gap_exceeded = False
 
-            Args:
-                data_arr (np.ndarray): 1D array of landmark data.
-                cutoff (float): lowpass filter cutoff frequency.
-                fs (float): sampling frequency of data.
-                order (int): order of filter.
+            for col in cols:
+                arr = clean_df[col].to_numpy()
+                mask = np.concatenate(([False], np.isnan(arr), [False]))
+                if mask.any():
+                    idx = np.nonzero(mask[1:] != mask[:-1])[0]
+                    gap = (idx[1::2] - idx[::2]).max()
+                    if gap > MAX_GAP_THRESHOLD:
+                        is_gap_exceeded = True
+                        break
 
-            Returns:
-                filtered_arr (np.ndarray): 1D array of filtered landmark data.
-            """
-
-            # generate filter coefficients
-            b, a = butter(N=order, Wn=cutoff, fs=fs, btype='low')
-
-            # apply filter forward and backward to eliminate phase delay
-            filtered_data = filtfilt(b, a, data_arr)
-
-            return filtered_data
-
-        # initialize output dictionary
-        filtered_landmarks: dict = {}
-
-        # iterate over items (key, value)
-        for landmark_name, landmark_axes in landmarks_dict.items():
-
-            landmark_data_lst: list = []    # reset list
-            is_gap_exceeded: bool = False   # gap safety flag
-
-            # check for gaps across all axes (x, y, z)
-            for landmark_axis in landmark_axes:
-                if _max_repeated_nan(landmark_axis) > MAX_GAP_THRESHOLD:
-                    is_gap_exceeded = True
-
-            # handle axes with gaps that exceed the threshold
             if is_gap_exceeded:
-                print(f'Landmark {landmark_name} was flagged as invalid due to missing data > {MAX_GAP_THRESHOLD}.')
-                nan_arr: np.ndarray = np.full_like(landmark_axes[0], np.nan)
-                filtered_landmarks[landmark_name] = [nan_arr, nan_arr, nan_arr]
+                print(f'Landmark {lm} flagged invalid (missing data > {MAX_GAP_THRESHOLD}).')
+                clean_df[cols] = np.nan
+            else:
+                valid_cols.extend(cols)
+
+        # if all landmarks are invalid
+        if not valid_cols:
+            return clean_df
+
+        # interpolation
+        valid_df: pd.DataFrame = clean_df[valid_cols].interpolate(method='linear', limit_direction='both')
+        raw_interp_df: pd.DataFrame = valid_df.copy()
+
+        # Hampel filtering
+        for col in valid_cols:
+            arr = valid_df[col].to_numpy()
+            try:
+                arr = hampel(arr, window_size=HAMPEL_WINDOW, n_sigma=HAMPEL_SIGMA).filtered_data
+            except Exception:
+                pass
+            valid_df[col] = arr
+
+        # Butterworth filtering
+        b, a = butter(N=BUTTER_ORDER, Wn=CUTOFF_FREQ, btype='low', fs=self.fps)
+
+        # calculate padding (1.0 second)
+        padlen: int = int(1.0 * self.fps)
+        padlen = min(padlen, len(valid_df) - 1)     # prevent padlen from exceeding the data length
+
+        flat_coords_tensor: np.ndarray = valid_df.to_numpy()         # shape: (frames, valid_cols)
+        clean_coords_tensor: np.ndarray = filtfilt(b, a, flat_coords_tensor, axis=0, padlen=padlen)
+
+        # new data frame with filtered data
+        clean_df[valid_cols] = clean_coords_tensor
+
+        # 2) adjust rotation matrices to new landmark location
+        kinematic_chain: dict = self.get_kinematic_chain()
+
+        for target_joint, (start_joint, end_joint) in kinematic_chain.items():
+            rot_col = f'{target_joint}_rot'
+
+            # skip for missing landmarks
+            if rot_col not in df.columns or f'{start_joint}_x' not in valid_cols or f'{end_joint}_x' not in valid_cols:
                 continue
 
-            # preprocessing loop per axis
-            for data_arr in landmark_axes:
+            pos_start_raw = raw_interp_df[[f'{start_joint}_x', f'{start_joint}_y', f'{start_joint}_z']].to_numpy()
+            pos_end_raw = raw_interp_df[[f'{end_joint}_x', f'{end_joint}_y', f'{end_joint}_z']].to_numpy()
+            vec_raw = pos_end_raw - pos_start_raw
 
-                # interpolate gaps for Hampel and Butterworth filter
-                # -> IIR filters will output all NaNs if there is a single NaN
-                data_series: pd.Series = pd.Series(data_arr)
-                interp_data: np.ndarray = data_series.interpolate(method='linear', limit_direction='both').to_numpy()
+            pos_start_clean = clean_df[[f"{start_joint}_x", f"{start_joint}_y", f"{start_joint}_z"]].to_numpy()
+            pos_end_clean = clean_df[[f"{end_joint}_x", f"{end_joint}_y", f"{end_joint}_z"]].to_numpy()
+            vec_clean = pos_end_clean - pos_start_clean
 
-                # Hampel filtering
-                try:
-                    hampel_filt_arr: np.ndarray = hampel(interp_data,
-                                                         config['preprocessing']['hampel_window_size'],
-                                                         config['preprocessing']['hampel_n_sigma']).filtered_data
-                except Exception:
-                    hampel_filt_arr: np.ndarray = interp_data
+            stacked_rots = np.vstack(df[rot_col].to_numpy())
+            r_raw = stacked_rots.reshape(-1, 3, 3)
 
-                # Butterworth lowpass filtering
-                butter_filt_arr: np.ndarray = self.apply_padded_filter(hampel_filt_arr,
-                                                                       filter_func=_butterworth_lowpass,
-                                                                       pad_seconds=1.0,
-                                                                       cutoff = CUTOFF_FREQ,
-                                                                       fs = FS,
-                                                                       order = BUTTER_ORDER)
+            r_clean = self.apply_delta_rotation(vec_raw, vec_clean, r_raw)
+            clean_df[rot_col] = list(r_clean.reshape(-1, 9))
 
-                landmark_data_lst.append(butter_filt_arr)
-
-            filtered_landmarks[landmark_name] = landmark_data_lst
-
-        return filtered_landmarks
+        return clean_df
 
     # Hampel & Kalman & Savgol
     def filter_landmarks_kalman(self, landmarks_dict: dict) -> dict:

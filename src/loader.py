@@ -2,7 +2,6 @@
 
 # libraries
 import os
-import numpy as np
 import pandas as pd
 
 # modules
@@ -26,38 +25,8 @@ EXERCISE_LUT = {
 
     # WT-07 & WT-08 pair -> Hand Pronation/Supination
     'WT-07': 'ProSup',
-    'WT-08': 'ProSup',
-
-    # WT-09 & WT-10 pair -> Finger Tapping on Table
-    'WT-09': 'TableTapping',
-    'WT-10': 'TableTapping',
+    'WT-08': 'ProSup'
 }
-
-
-def load_video_files(video_path: str) -> list[str]:
-    """
-    Imports video files from a given project folder.
-
-    Args:
-        video_path (str): Path to the project folder.
-
-    Returns:
-        list: List of video file paths.
-    """
-
-    if not os.path.isdir(video_path):
-        raise ValueError(f'Not a valid project path: {video_path}')
-
-    # possible file formats
-    valid_formats = ('.mp4', '.avi', '.mov', '.mkv')
-
-    video_files: list[str] = [os.path.join(video_path, x) for x in os.listdir(video_path)
-                              if x.lower().endswith(valid_formats)]
-
-    if not video_files:
-        raise ValueError(f'No video files found in {video_path}')
-
-    return sorted(video_files)
 
 
 def parse_filename(fpath: str) -> tuple:
@@ -107,51 +76,14 @@ def parse_filename(fpath: str) -> tuple:
     return p_id, visit_id, affected_side, ex_name, ex_condition, ex_side, cam_id
 
 
-def load_landmarks_to_dict(csv_file: str) -> dict:
-    """
-    Loads landmark data stored in a csv file into a dictionary.
-    Each dict element has a label (e.g., wrist) as key and a list of ndarray for each axis (x,y,z) as value.
-
-    Args:
-        csv_file (str): Absolute path of the csv file.
-
-    Returns:
-        dict: Dictionary of landmarks and their corresponding 3D coordinates.
-    """
-
-    # read csv data in a pandas DataFrame
-    landmarks_df: pd.DataFrame = pd.read_csv(csv_file)
-    landmarks_dict: dict = dict()
-
-    # get a list of the base label names (without axis appendix)
-    base_names: list[str] = [label[:-2] for label in landmarks_df.columns if label.endswith('_x')]
-
-    for label in base_names:
-
-        try:
-            # get single axis arrays
-            x_landmark_data: np.ndarray = landmarks_df[f'{label}_x'].values
-            y_landmark_data: np.ndarray = landmarks_df[f'{label}_y'].values
-            z_landmark_data: np.ndarray = landmarks_df[f'{label}_z'].values
-
-            # store all axes in dict using the corresponding label
-            landmarks_dict[label] = [x_landmark_data, y_landmark_data, z_landmark_data]
-
-        except KeyError as e:
-            print(f'Warning: Missing coordinate column for {label}: {e}')
-            continue
-
-    return landmarks_dict
-
-
-def load_participants(csv_file_paths: list) -> None:
+def load_participants(parquet_file_paths: list) -> None:
     """
     Loads csv files with landmark coordinate of a movement exercise and passes the data to a Participant object.
     The created Participant object is stored as a pickle file for efficient handling of different exercises
     and participants.
 
     Args:
-        csv_file_paths (list): List with absolute paths of csv files with movement data (raw from MediaPipe).
+        parquet_file_paths (list): List with absolute paths of csv files with movement data (raw from MediaPipe).
 
     Returns:
         None
@@ -159,69 +91,36 @@ def load_participants(csv_file_paths: list) -> None:
 
     all_participants: dict = {}
 
-    normalized: bool = config['batch_tracking']['normalize']
-    pose_name_lst = config['body_parts']['pose_landmark_lst'][:25]   # ignore the lower limbs
-    hand_name_lst: list = config['body_parts']['hands_landmark_lst']
-
     # create ToolBox object for utility function calling
     tb: ToolBox = ToolBox()
 
     # loop through all csv files and add all exercises to the corresponding Participant
-    for csv_file_path in csv_file_paths:
+    for parquet_file_path in parquet_file_paths:
 
         # 1) parse file name
-        p_id, visit_id, affected_side, ex_name, side_condition, ex_side, cam_id = parse_filename(csv_file_path)
+        p_id, visit_id, affected_side, ex_name, side_condition, ex_side, cam_id = parse_filename(parquet_file_path)
 
         # 2) create unique keys
         session_key = f'{p_id}_{visit_id}'
 
         # 3) load or create participant object
         if session_key not in all_participants:
-            p: Participant = Participant(p_id, visit_id, affected_side)
-            all_participants[session_key] = p
+            all_participants[session_key] = Participant(p_id, visit_id, affected_side)
 
-        # 4) load csv data to dicts
-        raw_landmarks: dict = load_landmarks_to_dict(csv_file_path)
+        # 4) create Exercise object
+        ex: Exercise = Exercise(visit_id=visit_id, exercise_id=ex_name, side_condition=side_condition,
+                                side_focus=ex_side, cam_id=cam_id)
 
-        # 5) apply spatial transformation for 3D world coordinates (holistic upper limb model creation)
-        # if not normalized:
-        #     # 5.1) shift the reference coordinate system origin from hip center to shoulder center
-        #     raw_landmarks = tb.shift_origin_to_shoulders(landmarks_dict=raw_landmarks,
-        #                                                  shoulder_name_l=pose_name_lst[11],
-        #                                                  shoulder_name_r=pose_name_lst[12])
-        #
-        #     # 5.2) snap the hand wrists to the pose wrists
-        #     # left
-        #     raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
-        #                                           pose_wrist_name=pose_name_lst[15],
-        #                                           hand_wrist_name=hand_name_lst[0],
-        #                                           target_hand_landmarks=hand_name_lst[:21])
-        #     # right
-        #     raw_landmarks = tb.snap_hands_to_pose(landmarks_dict=raw_landmarks,
-        #                                           pose_wrist_name=pose_name_lst[16],
-        #                                           hand_wrist_name=hand_name_lst[21],
-        #                                           target_hand_landmarks=hand_name_lst[21:])
+        # 5) add path to file pointer
+        ex.raw_landmark_data_path = parquet_file_path
 
-        # raw dicts (pose and hands)
-        raw_pose_landmarks: dict = {k: raw_landmarks[k] for k in pose_name_lst if k in raw_landmarks}
-        raw_hand_landmarks: dict = {k: raw_landmarks[k] for k in hand_name_lst if k in raw_landmarks}
-
-        # 6) preprocess raw data
-        processed_landmarks: dict = tb.filter_landmarks_butter(raw_landmarks)
-
-        if normalized:
-            # correct for the aspect ratio in pixels
-            processed_landmarks: dict = tb.normalize_to_aspect_ratio(processed_landmarks)
-
-        # processed dicts (pose and hands)
-        clean_pose_landmarks: dict = {k: processed_landmarks[k] for k in pose_name_lst if k in processed_landmarks}
-        clean_hand_landmarks: dict = {k: processed_landmarks[k] for k in hand_name_lst if k in processed_landmarks}
-
-        # 7) create exercise object
-        ex: Exercise = Exercise(visit_id=visit_id, exercise_id=ex_name,
-                                side_condition=side_condition, side_focus=ex_side, cam_id=cam_id,
-                                raw_hand_landmarks=raw_hand_landmarks, clean_hand_landmarks=clean_hand_landmarks,
-                                raw_pose_landmarks=raw_pose_landmarks, clean_pose_landmarks=clean_pose_landmarks)
+        # 6) data processing phase
+        # load
+        raw_df: pd.DataFrame = ex.load_dataframe('raw')
+        # filter
+        clean_df: pd.DataFrame = tb.filter_landmark_dataframe(raw_df)
+        # save
+        ex.save_dataframe(clean_df, stage='clean')
 
         # add exercise object to participant
         all_participants[session_key].add_exercise(ex)
@@ -247,5 +146,4 @@ def load_participants(csv_file_paths: list) -> None:
             ex.right_hand_size = right_size
 
         # 4) Save the current participant object
-        p.save(f'{project_path}/data/03_processed')
-
+        p.save(os.path.join(project_path,'data', '03_processed'))

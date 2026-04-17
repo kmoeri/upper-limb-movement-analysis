@@ -12,8 +12,8 @@ from src.loader import load_participants
 def run_participant_loader():
 
     # load source data
-    project_name = config['batch_tracking']['project_name']
-    tracked_data_src_path: str = os.path.join(project_path, 'data', '02_mediapipe-raw')
+    project_name: str = config['project_cfg']['project_name']
+    tracked_data_src_path: str = os.path.join(project_path, 'data', '02_tracking_data')
     tracked_data_dirs: list[str] = [os.path.join(tracked_data_src_path, x)
                                     for x in sorted(os.listdir(tracked_data_src_path)) if x.startswith('P')]
 
@@ -22,7 +22,7 @@ def run_participant_loader():
 
     for tracked_data_dir in tracked_data_dirs:
         [tracked_data_path_lst.append(os.path.join(tracked_data_dir, x)) for x in sorted(os.listdir(tracked_data_dir))
-                                      if x.startswith(project_name) and x.endswith('.csv')]
+                                      if x.startswith(project_name) and x.endswith('.parquet')]
 
     # load Participant objects
     load_participants(tracked_data_path_lst)
