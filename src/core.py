@@ -3,6 +3,8 @@
 # libraries
 import os
 import pickle
+import numpy as np
+import pandas as pd
 from dataclasses import dataclass, field
 
 
@@ -10,26 +12,64 @@ from dataclasses import dataclass, field
 @dataclass
 class Exercise:
     """
-    The Exercise class is a container for holding exercise information and storing data (tracking and metrics).
+    The Exercise class is a metadata container for exercise information.
+    Kinematic data is stored as Parquet and loaded as DataFrames or NumPy tensors.
     """
-    # exercise info
-    visit_id: str                                               # 'T1', 'T2', 'T3'
-    exercise_id: str                                            # 'FingerTapping', 'HandOpening', etc.
-    side_condition: str                                         # 'Healthy' or 'Affected'
-    side_focus: str                                             # 'L' or 'R'
+    # exercise information
+    visit_id: str                                   # 'T1', 'T2', 'T3'
+    exercise_id: str                                # 'FingerTapping', 'HandOpening', etc.
+    side_condition: str                             # 'Healthy' or 'Affected'
+    side_focus: str                                 # 'L' or 'R'
 
     # metadata
-    cam_id: str                                                 # e.g., 'camZ'
-    tracker_type: str = 'mediapipe'                             # type of pose estimation and tracking
+    cam_id: str                                     # e.g., 'camZ'
 
     # data storage
-    raw_pose_landmarks: dict = field(default_factory=dict)      # tracked pose landmarks raw
-    raw_hand_landmarks: dict = field(default_factory=dict)      # tracked hand landmarks raw
-    clean_pose_landmarks: dict = field(default_factory=dict)    # preprocessed pose data (world: meters, normalized: px)
-    clean_hand_landmarks: dict = field(default_factory=dict)    # preprocessed hand data (world: meters, normalized: px)
-    aligned_hand_landmarks: dict = field(default_factory=dict)  # aligned hand data (world: meters, normalized: px)
+    raw_landmark_data_path: str = ''                # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ.parquet'
+    clean_landmark_data_path: str = ''              # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ_clean.parquet'
 
-    metrics: dict = field(default_factory=dict)                 # stores results
+    metrics: dict = field(default_factory=dict)     # stores results
+
+    def load_dataframe(self, stage: str = 'raw') -> pd.DataFrame:
+        file_path: str = self.raw_landmark_data_path if stage == 'raw' else self.clean_landmark_data_path
+
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f'Data for stage "{stage}" not found at {file_path}.')
+
+        return pd.read_parquet(file_path)
+
+    def save_dataframe(self, df: pd.DataFrame, stage: str = 'clean') -> None:
+        file_path: str = self.raw_landmark_data_path if stage == 'raw' else self.clean_landmark_data_path
+
+        # if saved for the 1st time, generate proper file path
+        if stage == 'clean' and not file_path:
+            base, ext = os.path.splitext(self.raw_landmark_data_path)
+            file_path = f'{base}_clean{ext}'
+            self.clean_landmark_data_path = file_path
+
+        df.to_parquet(file_path, engine='pyarrow')
+
+    def get_coord_tensor(self, stage: str = 'clean') -> np.ndarray:
+        df = self.load_dataframe(stage)
+
+        coord_cols: list[str] = [col for col in df.columns if col.endswith(('_x', '_y', '_z'))]
+
+        n_frames: int = len(df)
+        n_joints: int = len(coord_cols) // 3
+
+        return df[coord_cols].to_numpy().reshape(n_frames, n_joints, 3)
+
+    def get_rot_tensor(self, stage: str = 'clean') -> np.ndarray:
+        df = self.load_dataframe(stage)
+
+        rot_cols: list[str] = [col for col in df.columns if col.endswith('_rot')]
+
+        n_frames: int = len(df)
+        n_joints: int = len(rot_cols)
+
+        # flatten 9 element array and reshape to 3x3 matrices
+        stacked_rots = np.vstack(df[rot_cols].to_numpy().flatten())
+        return stacked_rots.reshape(n_frames, n_joints, 3, 3)
 
 
 class Participant:
