@@ -9,7 +9,32 @@ import concurrent.futures
 # modules
 from src.config import config, project_path
 from src.tracking import combined_landmark_extractor
-from src.loader import load_video_files
+
+
+def load_video_files(video_path: str) -> list[str]:
+    """
+    Imports video files from a given project folder.
+
+    Args:
+        video_path (str): Path to the project folder.
+
+    Returns:
+        list: List of video file paths.
+    """
+
+    if not os.path.isdir(video_path):
+        raise ValueError(f'Not a valid project path: {video_path}')
+
+    # possible file formats
+    valid_formats = ('.mp4', '.avi', '.mov', '.mkv')
+
+    video_files: list[str] = [os.path.join(video_path, x) for x in os.listdir(video_path)
+                              if x.lower().endswith(valid_formats)]
+
+    if not video_files:
+        raise ValueError(f'No video files found in {video_path}')
+
+    return sorted(video_files)
 
 
 def save_tracked_landmarks_to_csv(video_name: str, out_dir: str,
@@ -120,8 +145,8 @@ def run_batch_tracking():
     pose_model_path: str = os.path.join(project_path,'mp_models', 'pose_landmarker_heavy.task')
 
     # source and destination path
-    tracking_src_path: str = os.path.join(project_path, 'data', '01_videos-raw')
-    tracking_out_path: str = os.path.join(project_path, 'data', '02_mediapipe-raw')
+    tracking_src_path: str = os.path.join(project_path, 'data', '01_videos_raw')
+    tracking_out_path: str = os.path.join(project_path, 'data', '02_tracking_data')
 
     # extract normalized (if True) or world coordinates (if False)
     normalize_bool: bool = config['batch_tracking']['normalize']
