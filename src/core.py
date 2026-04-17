@@ -41,11 +41,8 @@ class Exercise:
     def save_dataframe(self, df: pd.DataFrame, stage: str = 'clean') -> None:
         file_path: str = self.raw_landmark_data_path if stage == 'raw' else self.clean_landmark_data_path
 
-        # if saved for the 1st time, generate proper file path
-        if stage == 'clean' and not file_path:
-            base, ext = os.path.splitext(self.raw_landmark_data_path)
-            file_path = f'{base}_clean{ext}'
-            self.clean_landmark_data_path = file_path
+        if not file_path:
+            raise ValueError(f'Save aborted: Data for stage "{stage}" has not been set.')
 
         df.to_parquet(file_path, engine='pyarrow')
 

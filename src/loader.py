@@ -3,6 +3,7 @@
 # libraries
 import os
 import pandas as pd
+from tqdm import tqdm
 
 # modules
 from src.config import config, project_path
@@ -94,11 +95,12 @@ def load_participants(parquet_file_paths: list) -> None:
     # create ToolBox object for utility function calling
     tb: ToolBox = ToolBox()
 
+    print('Smoothing and registering participant landmarks ...')
     # loop through all csv files and add all exercises to the corresponding Participant
-    for parquet_file_path in parquet_file_paths:
+    for raw_path in tqdm(parquet_file_paths, desc='Filtering Landmark Coordinates'):
 
         # 1) parse file name
-        p_id, visit_id, affected_side, ex_name, side_condition, ex_side, cam_id = parse_filename(parquet_file_path)
+        p_id, visit_id, affected_side, ex_name, side_condition, ex_side, cam_id = parse_filename(raw_path)
 
         # 2) create unique keys
         session_key = f'{p_id}_{visit_id}'
@@ -112,21 +114,25 @@ def load_participants(parquet_file_paths: list) -> None:
                                 side_focus=ex_side, cam_id=cam_id)
 
         # 5) add path to file pointer
-        ex.raw_landmark_data_path = parquet_file_path
+        ex.raw_landmark_data_path = raw_path
+        clean_path = raw_path.replace('_raw.parquet', '_clean.parquet')
+        ex.clean_landmark_data_path = clean_path
 
-        # 6) data processing phase
-        # load
-        raw_df: pd.DataFrame = ex.load_dataframe('raw')
-        # filter
-        clean_df: pd.DataFrame = tb.filter_landmark_dataframe(raw_df)
-        # save
-        ex.save_dataframe(clean_df, stage='clean')
+        if not os.path.exists(clean_path):
+            # 6) data processing phase
+            # load
+            raw_df: pd.DataFrame = ex.load_dataframe('raw')
+            # filter
+            clean_df: pd.DataFrame = tb.filter_landmark_dataframe(raw_df)
+            # save
+            ex.save_dataframe(clean_df, stage='clean')
 
         # add exercise object to participant
         all_participants[session_key].add_exercise(ex)
 
     # calculate the reference hand size for each participant, add it to each exercise, and save the participant objects
-    for p in all_participants.values():
+    print('Calculating anatomical reference hand sizes ...')
+    for p in tqdm(all_participants.values(), desc='Calculating Participant Hand Size.'):
 
         # 1) calculate the global hand sizes (left and right) for the current Participant
         best_hand_ref_dict = tb.determine_best_hand_reference(p)    # Returns: {p.pid: {'Affected': X, 'Healthy': Y}}

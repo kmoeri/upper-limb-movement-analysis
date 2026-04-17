@@ -478,7 +478,8 @@ class ToolBox:
         l_hand_size_link_lst: list[str] = config['body_parts']['hand_size_left']
         r_hand_size_link_lst: list[str] = config['body_parts']['hand_size_right']
 
-        def get_med_hand_size(exercise: Exercise, target_side: str, hand_specific_link_lst: list[list[str]],
+        def get_med_hand_size(#exercise: Exercise, target_side: str, hand_specific_link_lst: list[list[str]],
+                              df: pd.DataFrame,
                               hand_size_link_lst: list[str], occlusion_threshold: float = 0.85,
                               framerate: float = self.fps) -> float:
             """
@@ -496,142 +497,104 @@ class ToolBox:
                 framerate (float): Number of frames per second of the underlying data.
 
             Returns:
-                median_hand_size (float): The median size of the given hand.
+                float: The median size of the given hand.
             """
 
             # length of each hand segment
-            tb: ToolBox = ToolBox()
-            exercise_dict: dict = exercise.clean_hand_landmarks
+            num_frames: int = len(df)
+            segment_sums: np.ndarray = np.zeros(num_frames)
+            valid_mask: np.ndarray = np.ones(num_frames, dtype=bool)
 
-            df_cols = {}
-            for label, axes in exercise_dict.items():
-                if label == 'frame':  # do not extract the column named 'frame' (usually first)
-                    continue
-                df_cols[f'{label}_x'] = axes[0]
-                df_cols[f'{label}_y'] = axes[1]
-                df_cols[f'{label}_z'] = axes[2]
-
-            exercise_df: pd.DataFrame = pd.DataFrame(df_cols)
-            segment_len_df: pd.DataFrame = tb.calculate_3d_segment_lengths(exercise_df, hand_specific_link_lst)
-
-            # calculate the hand size
             try:
-                # get handedness: index 1 -> left hand, index 2 -> right hand. First column is 'wrist1' or 'wrist2'
-                side: int = 1 if target_side == 'L' else 2
+                # calculate hand size by the sum of anatomical segments (e.g., wrist1 -> mcp -> pip -> dip -> ftip)
+                for link in hand_size_link_lst:
+                    j1, j2 = link.split('-')
+                    lm1 = df[[f'{j1}_x', f'{j1}_y', f'{j1}_z']].to_numpy()
+                    lm2 = df[[f'{j2}_x', f'{j2}_y', f'{j2}_z']].to_numpy()
 
-                # drop rows where any of the segments to calculate the hand size are missing (NaN)
-                clean_segment_len: pd.DataFrame = segment_len_df.dropna(subset=hand_size_link_lst)
+                    dist = np.linalg.norm(lm1 - lm2, axis=1)
+                    segment_sums += dist
+                    valid_mask &= ~np.isnan(dist)   # mark frames with missing joints as invalid
 
-                # distance from wrist to fingertip by the sum of each segment inbetween
-                hand_size_segment_len: pd.Series = clean_segment_len[hand_size_link_lst].sum(axis=1)
+                # calculate the direct distance (wrist -> ftip)
+                start_joint = hand_size_link_lst[0].split('-')[0]
+                end_joint = hand_size_link_lst[-1].split('-')[1]
 
-                # distance from wrist to fingertip by direct connection
-                wrist_middle_finger_dist = tb.calculate_3d_segment_lengths(exercise_df.loc[clean_segment_len.index],
-                                                                           [[f'wrist{side}', f'ftip{side}3']])
-            except KeyError as e:
-                print(
-                    f"Error: Could not calculate hand size. Missing one or more required middle finger segment columns: {e}")
-                del tb
-                return 0.0
+                pos_start = df[[f'{start_joint}_x', f'{start_joint}_y', f'{start_joint}_z']].to_numpy()
+                pos_end = df[[f'{end_joint}_x', f'{end_joint}_y', f'{end_joint}_z']].to_numpy()
+                direct_dist = np.linalg.norm(pos_start - pos_end, axis=1)
 
-            # direct wrist to middle fingertip distance
-            hand_size_direct_len: pd.Series = wrist_middle_finger_dist[f'wrist{side}-ftip{side}3']
+                # occlusion filter: hand size segment lengths of flexed hands, i.e., fists should not be included
+                if np.any(segment_sums[valid_mask] < direct_dist[valid_mask]):
+                    print('Warning: Abnormal values for hand size calculation. '
+                          'Direct wrist-ftip distance was larger than the sum of segments.')
 
-            # occlusion filter: hand size segment lengths of flexed hands, i.e., fists should not be included
-            diff_dist_series: pd.Series = hand_size_segment_len - hand_size_direct_len
-            if (diff_dist_series.values < 0).any():
-                print('Warning: tracking detected abnormal values for hand size calculation. '
-                      'Direct wrist-ftip distance was larger than sum of segments.')
+                # apply threshold mask
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    ratio = direct_dist / segment_sums
 
-            # occlusion metric
-            occlusion_ratio = hand_size_direct_len / hand_size_segment_len
-            filt_mask_lst = occlusion_ratio > occlusion_threshold
+                flat_mask = (ratio > occlusion_threshold) & valid_mask
 
-            # find at least a sum of frames equal or larger than 1s of 'flat' hand positions (e.g., 90 fps -> 90 frames)
-            if sum(filt_mask_lst) < int(framerate):
-                print(f'Warning: current exercise was skipped for median hand size calculation.'
-                      f'Not enough flat hand positions found (found: {sum(filt_mask_lst)}).')
-                del tb
-                return 0.0
+                if np.sum(flat_mask) < int(framerate):
+                    return 0.0
 
-            # get the median hand size of the 'flat' hand positions
-            median_hand_size: float = np.median(hand_size_segment_len[filt_mask_lst].tolist())
+                return float(np.median(segment_sums[flat_mask]))
 
-            del tb
-            return median_hand_size
+            except Exception as e:
+                print(f'Error: missing columns for hand size calculation: {e}')
 
         # variables for results
         best_hand_ref_dict: dict = dict()
         med_results = {'L': [], 'R': []}
+        thresh_lst = config['preprocessing']['thresh_lst']  # relax the threshold for cases with severe spasticity
 
         # run for each exercise
-        for ex_key in p.exercises.keys():
+        for ex_key, exercise in p.exercises.items():
 
             # extract side of focus
-            hand_of_focus: str = p.exercises[ex_key].side_focus
+            hand_of_focus: str = exercise.side_focus
+            passive_hand: str = 'R' if hand_of_focus == 'L' else 'L'
 
-            # determine the links based on the side of focus ('L' or 'R')
-            if hand_of_focus == 'L':
-                passive_hand = 'R'
-                active_hand_link_lst: list = link_lst[:len(link_lst) // 2]
-                passive_hand_link_lst: list = link_lst[len(link_lst) // 2:]
-                active_hand_size_link_lst: list = l_hand_size_link_lst
-                passive_hand_size_link_lst: list = r_hand_size_link_lst
+            active_links = l_hand_size_link_lst if hand_of_focus == 'L' else r_hand_size_link_lst
+            passive_links = r_hand_size_link_lst if hand_of_focus == 'L' else l_hand_size_link_lst
 
-            else:
-                passive_hand = 'L'
-                active_hand_link_lst: list = link_lst[len(link_lst) // 2:]
-                passive_hand_link_lst: list = link_lst[:len(link_lst) // 2]
-                active_hand_size_link_lst: list = r_hand_size_link_lst
-                passive_hand_size_link_lst: list = l_hand_size_link_lst
+            # load the clean parquet file
+            try:
+                df_clean: pd.DataFrame = exercise.load_dataframe(stage='clean')
+            except FileNotFoundError:
+                print(f'Skipping {ex_key}: No clean dataframe found for this exercise.')
+                continue
 
-            # relax the threshold for more severe spasticity affecting the hand
-            thresh_lst = config['preprocessing']['thresh_lst']
-            active_med_hand_size: float = 0.0
-            passive_med_hand_size: float = 0.0
+            active_med: float = 0.0
+            passive_med: float = 0.0
 
             # calculate median hand sizes for different hand aperture threshold until return variable is > 0.0
             # active side
             for thresh in thresh_lst:
-                active_med_hand_size = get_med_hand_size(p.exercises[ex_key],
-                                                         target_side=hand_of_focus,
-                                                         hand_specific_link_lst=active_hand_link_lst,
-                                                         hand_size_link_lst=active_hand_size_link_lst,
-                                                         occlusion_threshold=thresh,
-                                                         framerate=self.fps)
+                if active_med == 0.0:
+                    active_med = get_med_hand_size(df_clean, active_links, thresh, self.fps)
+                if passive_med == 0.0:
+                    passive_med = get_med_hand_size(df_clean, passive_links, thresh, self.fps)
 
-                if active_med_hand_size > 0.0:
+                if active_med > 0.0 and passive_med > 0.0:
                     break
 
-            # passive side
-            for thresh in thresh_lst:
-                passive_med_hand_size = get_med_hand_size(p.exercises[ex_key],
-                                                          target_side=passive_hand,
-                                                          hand_specific_link_lst=passive_hand_link_lst,
-                                                          hand_size_link_lst=passive_hand_size_link_lst,
-                                                          occlusion_threshold=thresh,
-                                                          framerate=self.fps)
+            if active_med == 0.0 or passive_med == 0.0:
+                print(f'Warning: "{ex_key}" ({p.pid}, {p.visit_id}) yielded no median for one or both hand size.')
 
-                if passive_med_hand_size > 0.0:
-                    break
-
-                if active_med_hand_size == 0.0 or passive_med_hand_size == 0.0:
-                    print(
-                        f'Warning: Exercise "{ex_key}" of participant {p.pid} for visit {p.visit_id} yielded no median for either hand size.')
-
-            med_results[hand_of_focus].append(active_med_hand_size)
-            med_results[passive_hand].append(passive_med_hand_size)
+            med_results[hand_of_focus].append(active_med)
+            med_results[passive_hand].append(passive_med)
 
         # select the largest median hand size
-        max_left_hand_size: float = max(med_results['L']) if med_results['L'] else 0.0
-        max_right_hand_size: float = max(med_results['R']) if med_results['R'] else 0.0
+        max_left: float = max(med_results['L']) if med_results['L'] else 0.0
+        max_right: float = max(med_results['R']) if med_results['R'] else 0.0
 
         # add the selected hand size to the dictionary
         if p.affected_side == 'L':
-            best_hand_ref_dict[p.pid] = {'Affected': max_left_hand_size, 'Healthy': max_right_hand_size}
+            best_hand_ref_dict[p.pid] = {'Affected': max_left, 'Healthy': max_right}
 
         elif p.affected_side == 'R':
-            best_hand_ref_dict[p.pid] = {'Affected': max_right_hand_size, 'Healthy': max_left_hand_size}
+            best_hand_ref_dict[p.pid] = {'Affected': max_right, 'Healthy': max_left}
 
         return best_hand_ref_dict
 
