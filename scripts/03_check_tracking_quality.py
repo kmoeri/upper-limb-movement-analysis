@@ -5,6 +5,7 @@
 import os
 import pandas as pd
 import statsmodels.formula.api as smf
+from tqdm import tqdm
 from scipy.stats import chi2
 
 # modules
@@ -40,10 +41,10 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
     participant_ref_dict: dict = ref_hand_size_dict.get(p.pid, {})
 
     # run for each exercise
-    for ex_key in p.exercises.keys():
+    for ex_key, ex in p.exercises.items():
 
         # determine the active and passive side ('L' or 'R')
-        active_side: str = p.exercises[ex_key].side_focus
+        active_side: str = ex.side_focus
         passive_side: str = 'R' if active_side == 'L' else 'L'
 
         # map the active and passive sides to the affected and healthy sides by participant info
@@ -64,18 +65,12 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
             }
         }
 
-        # load the exercise values in a dataframe
-        exercise_dict = p.exercises[ex_key].clean_hand_landmarks
-        df_cols = {}
-
-        for label, axes in exercise_dict.items():
-            if label == 'frame':
-                continue
-            df_cols[f'{label}_x'] = axes[0]
-            df_cols[f'{label}_y'] = axes[1]
-            df_cols[f'{label}_z'] = axes[2]
-
-        exercise_df: pd.DataFrame = pd.DataFrame(df_cols)
+        # load the raw parquet dataframe
+        try:
+            exercise_df: pd.DataFrame = ex.load_dataframe('raw')
+        except FileNotFoundError:
+            print(f'Warning: No raw data found for {ex_key} of {p.pid}. Skipping exercise.')
+            continue
 
         for role, role_info in hand_roles.items():
             curr_link_lst = role_info['link_idx']
@@ -85,7 +80,6 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
             med_hand_size: float = participant_ref_dict.get(condition, 0.0)
 
             # handle missing median hand size
-
             if med_hand_size == 0.0:
                 opposite_condition = 'Healthy' if condition == 'Affected' else 'Affected'
                 med_hand_size = participant_ref_dict.get(opposite_condition, 0.0)
@@ -145,10 +139,10 @@ def get_arm_segment_stability(p: Participant) -> pd.DataFrame:
     tb: ToolBox = ToolBox()
 
     # run for each exercise
-    for ex_key in p.exercises.keys():
+    for ex_key, ex in p.exercises.items():
 
         # determine the active and passive side ('L' or 'R')
-        active_side: str = p.exercises[ex_key].side_focus
+        active_side: str = ex.side_focus
         passive_side: str = 'R' if active_side == 'L' else 'L'
 
         # map the active and passive sides to the affected and healthy sides by participant info
@@ -169,18 +163,12 @@ def get_arm_segment_stability(p: Participant) -> pd.DataFrame:
             }
         }
 
-        # load the exercise values in a dataframe
-        exercise_dict = p.exercises[ex_key].clean_pose_landmarks
-        df_cols = {}
-
-        for label, axes in exercise_dict.items():
-            if label == 'frame':
-                continue
-            df_cols[f'{label}_x'] = axes[0]
-            df_cols[f'{label}_y'] = axes[1]
-            df_cols[f'{label}_z'] = axes[2]
-
-        exercise_df: pd.DataFrame = pd.DataFrame(df_cols)
+        # load the raw parquet dataframe
+        try:
+            exercise_df: pd.DataFrame = ex.load_dataframe('raw')
+        except FileNotFoundError:
+            print(f'Warning: No raw data found for {ex_key} of {p.pid}. Skipping exercise.')
+            continue
 
         for role, role_info in arm_roles.items():
             curr_link_lst = role_info['link_idx']
@@ -360,7 +348,7 @@ def run_temporal_consistency_check():
     tb = ToolBox()
 
     # run for each participant and each visit
-    for pickle_file in participant_pickle_lst:
+    for pickle_file in tqdm(participant_pickle_lst, desc='Running temporal consistency check...'):
         p: Participant = Participant.load(os.path.join(participant_objs_path, pickle_file))
 
         # determine coefficients of variation for each hand segment

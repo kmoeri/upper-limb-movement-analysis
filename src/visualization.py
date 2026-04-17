@@ -219,6 +219,8 @@ class Visualizer:
             None
         """
 
+        sns.set_style('white')
+
         plt.figure(figsize=(12, 6))
 
         # custom palette for the four states
@@ -232,13 +234,13 @@ class Visualizer:
         # order of the legend and bars
         hue_order = ['Healthy (Active)', 'Healthy (Passive)', 'Affected (Active)', 'Affected (Passive)']
 
-        sns.boxplot(data=segment_df,
-                    x=segment_col,
-                    y='CoV',
-                    hue='State',
-                    palette=custom_palette,
-                    hue_order=hue_order,
-                    order=segment_order)
+        ax = sns.boxplot(data=segment_df,
+                         x=segment_col,
+                         y='CoV',
+                         hue='State',
+                         palette=custom_palette,
+                         hue_order=hue_order,
+                         order=segment_order)
 
         plt.title(f'Temporal Consistency: Active vs. Passive {body_part}', fontsize=14)
         plt.ylabel('Mean CoV (%)', fontsize=12)
@@ -247,10 +249,37 @@ class Visualizer:
         # legend placed outside the plot to prevent it from covering data
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title=f'{body_part} State')
 
-        plt.yticks(np.arange(0, 100 + 10, 10))
+        # dynamic y-axis scaling
+        max_cov: float = segment_df['CoV'].max()
+
+        # set the ceiling 15% higher than the max value
+        ceiling: float = max_cov * 1.15
+
+        if ceiling <= 5.0:
+            step = 0.5          # steps: 0.5%
+        elif ceiling <= 15.0:
+            step = 2.0          # steps: 2.0%
+        else:
+            step = 5.0          # steps: 5.0%
+
+        # create tick marks
+        ticks: np.ndarray = np.arange(0, np.ceil(ceiling) + step, step)
+
+        # format labels
+        labels: list = [f'{tick:.1f}' if step < 1 else f'{int(tick)}' for tick in ticks]
+
+        # apply limits, ticks, and labels
+        plt.ylim(0, ticks[-1])
+        plt.yticks(ticks, labels=labels)
+
+        # force horizontal grid
+        ax.yaxis.grid(True, color='lightgrey', linestyle='-', linewidth=1.0)
+        ax.xaxis.grid(False)
+        ax.set_axisbelow(True)
 
         plt.tight_layout()
 
+        # save plot
         suffix = '.png'
         f_name: str = f'4-Way_Consistency_Boxplot_{body_part}{suffix}'
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)

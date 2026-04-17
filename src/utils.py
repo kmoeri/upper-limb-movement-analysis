@@ -478,9 +478,7 @@ class ToolBox:
         l_hand_size_link_lst: list[str] = config['body_parts']['hand_size_left']
         r_hand_size_link_lst: list[str] = config['body_parts']['hand_size_right']
 
-        def get_med_hand_size(#exercise: Exercise, target_side: str, hand_specific_link_lst: list[list[str]],
-                              df: pd.DataFrame,
-                              hand_size_link_lst: list[str], occlusion_threshold: float = 0.85,
+        def get_med_hand_size(df: pd.DataFrame, hand_size_link_lst: list[str], occlusion_threshold: float = 0.85,
                               framerate: float = self.fps) -> float:
             """
             Calculates the median hand size using the anatomical hand size (sum of wrist to middle finger knuckle
@@ -599,47 +597,39 @@ class ToolBox:
         return best_hand_ref_dict
 
     @staticmethod
-    def calculate_3d_segment_lengths(landmarks_df: pd.DataFrame, landmark_link_lst: list[list[str]]) -> pd.DataFrame:
+    def calculate_3d_segment_lengths(df: pd.DataFrame, link_lst: list[list[str]]) -> pd.DataFrame:
         """
         Calculates the 3D segment lengths for all frames in the DataFrame using vectorized operations.
 
         Args:
-            landmarks_df (pd.DataFrame): dataframe containing 'landmark_x', 'landmark_y', 'landmark_z' landmarks.
-            landmark_link_lst (list): List of connected landmark pairs, e.g., [['wrist1', 'cmc11'], ...].
+            df (pd.DataFrame): dataframe containing 'landmark_x', 'landmark_y', 'landmark_z' landmarks.
+            link_lst (list): List of connected landmark pairs, e.g., [['wrist1', 'cmc11'], ...].
 
         Returns:
             pd.DataFrame: A new DataFrame with columns for each segment length.
         """
 
-        segment_len_dict: dict = {}
+        lengths: dict = {}
 
         # run for each body part combination (list) in segment list
-        for bp1_name, bp2_name in landmark_link_lst:
+        for link in link_lst:
 
-            segment_name = f'{bp1_name}-{bp2_name}'
+            bp1_name, bp2_name = link[0], link[1]
 
             # extract landmark coordinate columns (x, y, z) from landmark dataframe (movement data)
             try:
                 # extract x, y, and z coordinates for both landmarks across all rows (frames)
-                p1 = landmarks_df[[f'{bp1_name}_x', f'{bp1_name}_y', f'{bp1_name}_z']].values
-                p2 = landmarks_df[[f'{bp2_name}_x', f'{bp2_name}_y', f'{bp2_name}_z']].values
+                p1 = df[[f'{bp1_name}_x', f'{bp1_name}_y', f'{bp1_name}_z']].to_numpy()
+                p2 = df[[f'{bp2_name}_x', f'{bp2_name}_y', f'{bp2_name}_z']].to_numpy()
             except KeyError as e:
-                print(f'Warning: missing column {e} for segment {segment_name}. Skipping.')
+                print(f'Warning: missing column {e} for segment {link}. Skipping.')
                 continue
 
-            # subtraction (diffs is an N x 3 array, where N is the number of frames)
-            diffs = p1 - p2
-
-            # squared difference
-            diffs_squared = diffs ** 2
-
             # Euclidean distance (L2 norm)
-            lengths = np.sqrt(np.sum(diffs_squared, axis=1))
+            dist = np.linalg.norm(p1 - p2, axis=1)
+            lengths[f'{bp1_name}-{bp2_name}'] = dist
 
-            # store the calculated lengths (an array of length N)
-            segment_len_dict[segment_name] = lengths
-
-        return pd.DataFrame(segment_len_dict, index=landmarks_df.index)
+        return pd.DataFrame(lengths, index=df.index)
 
     def init_short_time_fft(self) -> ShortTimeFFT:
 
