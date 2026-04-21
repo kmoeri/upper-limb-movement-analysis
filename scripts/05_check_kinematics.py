@@ -150,7 +150,7 @@ def _render_single_exercise(exercise: Exercise, pid: str, visit_id: str, ex_key:
 
         # render the dashboard
         viz.viz_render_dashboard(df, plot_metrics, pid, visit_id, ex_key, exercise.side_focus, skip_frames=2)
-        print(f"Successfully queued data for {ex_key}")
+        #print(f"Successfully queued data for {ex_key}")
 
     except Exception as e:
         print(f"Error processing {ex_key} for {pid}: {e}")

@@ -241,7 +241,7 @@ class ExerciseEvaluator:
         if save_plots and performance_features['extraction_status'] == 'success':
 
             self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_detrended'],
+                                                     signal=performance_features['signal_original'],
                                                      features=performance_features,
                                                      p_id=p_id,
                                                      visit_id=exercise.visit_id,
@@ -633,7 +633,7 @@ class ExerciseEvaluator:
         if save_plots and performance_features['extraction_status'] == 'success':
 
             self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_detrended'],
+                                                     signal=performance_features['signal_original'],
                                                      features=performance_features,
                                                      p_id=p_id,
                                                      visit_id=exercise.visit_id,
@@ -758,7 +758,7 @@ class ExerciseEvaluator:
         if save_plots and performance_features['extraction_status'] == 'success':
 
             self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_detrended'],
+                                                     signal=performance_features['signal_original'],
                                                      features=performance_features,
                                                      p_id=p_id,
                                                      visit_id=exercise.visit_id,

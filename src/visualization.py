@@ -9,6 +9,7 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.animation as animation
+from prompt_toolkit.contrib.telnet import TelnetServer
 from scipy import stats
 
 # modules
@@ -559,12 +560,10 @@ class Visualizer:
         # helper to extract a (3, frames) list of arrays for a specific joint
         def get_joint_data(joint_name):
             if f"{joint_name}_x" in df.columns:
-                return [df[f"{joint_name}_x"].tolist(),
-                        df[f"{joint_name}_y"].tolist(),
-                        df[f"{joint_name}_z"].tolist()]
+                return [df[f"{joint_name}_x"].tolist(), df[f"{joint_name}_y"].tolist(), df[f"{joint_name}_z"].tolist()]
             return None
 
-        # Safe identifier function
+        # safe identifier function
         def get_side_id(joint_name):
             for char in joint_name:
                 if char.isdigit():
@@ -595,13 +594,21 @@ class Visualizer:
                     if data:
                         dashboard_data['pose'][joint] = data
 
+        # extract rotation matrices for the active wrist
+        rot_matrices = {}
+        if 'ProSup' in ex_id:
+            active_side_idx = '1' if side_focus == 'L' else '2'
+            rot_col = f'wrist{active_side_idx}_rot'
+            if rot_col in df.columns:
+                stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
+                rot_matrices['active'] = stacked_rots
+
         num_metrics = len(metrics_dict)
 
         # ensure skip_frames is at least 1 (skip_frames == 1: use every frame, skip_frames == 2: use every 2nd frame)
         skip_frames = max(1, skip_frames)
 
         # extract number of frames from whichever hand exists
-        sample_lm = None
         if dashboard_data.get('right_hand'):
             sample_lm = list(dashboard_data['right_hand'].values())[0]
         elif dashboard_data.get('left_hand'):
@@ -617,19 +624,21 @@ class Visualizer:
         total_rows = 1 + num_metrics
         fig = plt.figure(figsize=(16, 4 + (3 * num_metrics)))
         fig.suptitle('Kinematic Quality Control Dashboard', fontsize=16, fontweight='bold')
-
         gs = gridspec.GridSpec(total_rows, 3, figure=fig, hspace=0.2, wspace=0.2)
 
         # initialize 3D plots (top row): right hand (col 1), pose (col 2), left hand (col 3)
-        ax_right = fig.add_subplot(gs[0, 0], projection='3d')
+        ax_left = fig.add_subplot(gs[0, 0], projection='3d')
         ax_pose = fig.add_subplot(gs[0, 1], projection='3d')
-        ax_left = fig.add_subplot(gs[0, 2], projection='3d')
+        ax_right = fig.add_subplot(gs[0, 2], projection='3d')
+
+        # colors for alternating tapping
+        alt_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
 
         # helper to calculate static axis limits and setup 3D plots
-        def _setup_3d_axis(ax, title, lm_dict, title_color='black'):
+        def _setup_3d_axis(ax, title, lm_dict, title_color='black', side_focused=None, current_ex=''):
             ax.set_title(title, fontsize=12, fontweight='bold', color=title_color)
             if not lm_dict:
-                return None, []
+                return None, {}
 
             # calculate global min/max for static bounding box
             all_x = [x for lm in lm_dict.values() for x in lm[0]]
@@ -642,7 +651,7 @@ class Visualizer:
             ax.set_zlim([np.min(all_z) - pad, np.max(all_z) + pad])
 
             # invert axes to transform between MediaPipe and matplotlib coordinate systems
-            ax.invert_yaxis()
+            #ax.invert_yaxis()
             ax.invert_xaxis()
             ax.invert_zaxis()
 
@@ -651,28 +660,59 @@ class Visualizer:
             ax.set_zticklabels([])
 
             # initialize empty plot elements
-            pts, = ax.plot([], [], [], 'ro', markersize=3, alpha=0.7)
-            return pts
+            pts, = ax.plot([], [], [], 'ko', markersize=2, alpha=1.0)
+
+            # dynamic exercise diagnosis
+            diag = {}
+
+            if side_focused:
+                if 'FingerTapping' in current_ex:
+                    diag['dot_w'], = ax.plot([], [], [], 'ro', markersize=6, zorder=10)
+                    diag['dot_f'], = ax.plot([], [], [], 'bo', markersize=6, zorder=10)
+                    diag['band'], = ax.plot([], [], [], '-', c='#00ff00', lw=2, zorder=5)
+
+                elif 'FingerAlternation' in current_ex:
+                    diag['dot_w'], = ax.plot([], [], [], 'ro', markersize=6, zorder=10)
+                    diag['dot_t'], = ax.plot([], [], [], 'ro', markersize=6, zorder=10)
+                    diag['dots_f'] = [ax.plot([], [], [], 'bo', markersize=6, zorder=10)[0] for _ in range(4)]
+                    diag['bands'] = [ax.plot([], [], [], '-', c=alt_colors[color], lw=1.5, alpha=0.5, zorder=5)[0] for color in range(4)]
+
+                elif 'HandOpening' in current_ex:
+                    diag['dot_w'], = ax.plot([], [], [], 'ro', markersize=8, zorder=10)
+                    diag['dots_f'] = [ax.plot([], [], [], 'bo', markersize=6, zorder=10)[0] for _ in range(4)]
+                    diag['bands'] = [ax.plot([], [], [], '-', c='#00ff00', lw=2, alpha=0.6, zorder=5)[0] for _ in range(4)]
+
+                elif 'ProSup' in current_ex:
+                    # xyz coordinate axes on the wrist
+                    diag['axis_x'], = ax.plot([], [], [], '-', c='r', lw=3, zorder=10, label='X')
+                    diag['axis_y'], = ax.plot([], [], [], '-', c='g', lw=3, zorder=10, label='Y')
+                    diag['axis_z'], = ax.plot([], [], [], '-', c='b', lw=3, zorder=10, label='Z')
+                    ax.legend(loc='upper left', fontsize=8)
+
+            return pts, diag
 
         # define dynamic titles and colors based on side_focus
-        right_color = '#2ca02c' if side_focus == 'R' else '#7f7f7f'
-        left_color = '#2ca02c' if side_focus == 'L' else '#7f7f7f'
-
-        right_title = "Right Hand (Active)" if side_focus == 'R' else "Right Hand (Passive)"
         left_title = "Left Hand (Active)" if side_focus == 'L' else "Left Hand (Passive)"
+        right_title = "Right Hand (Active)" if side_focus == 'R' else "Right Hand (Passive)"
+        left_color = '#2ca02c' if side_focus == 'L' else '#7f7f7f'
+        right_color = '#2ca02c' if side_focus == 'R' else '#7f7f7f'
 
         # set up the three axes for each 3D animation plot
-        pts_right = _setup_3d_axis(ax_right, right_title, dashboard_data.get('right_hand'), title_color=right_color)
-        pts_pose = _setup_3d_axis(ax_pose, "Pose Skeleton", dashboard_data.get('pose'))
-        pts_left = _setup_3d_axis(ax_left, left_title, dashboard_data.get('left_hand'), title_color=left_color)
+        pts_left, diag_l = _setup_3d_axis(ax_left, left_title, dashboard_data['left_hand'], left_color,
+                                          'L' if side_focus == 'L' else None, current_ex=ex_id)
+
+        pts_pose, diag_p = _setup_3d_axis(ax_pose, "Pose Skeleton", dashboard_data['pose'], current_ex=ex_id)
+
+        pts_right, diag_r = _setup_3d_axis(ax_right, right_title, dashboard_data['right_hand'], right_color,
+                                           'R' if side_focus == 'R' else None, current_ex=ex_id)
 
         # setup 3D links between landmarks
         pose_links = config['body_parts'].get('pose_link_lst', [])
         hand_links = config['body_parts'].get('hands_link_lst', [])
 
-        lines_right = [ax_right.plot([], [], [], '-', c=right_color, lw=2)[0] for _ in hand_links] if pts_right else []
-        lines_pose = [ax_pose.plot([], [], [], '-', c='#1f77b4', lw=2)[0] for _ in pose_links] if pts_pose else []
-        lines_left = [ax_left.plot([], [], [], '-', c=left_color, lw=2)[0] for _ in hand_links] if pts_left else []
+        lines_left = [ax_left.plot([], [], [], '-', c='gray', lw=1.5, alpha=0.8)[0] for _ in hand_links] if pts_left else []
+        lines_pose = [ax_pose.plot([], [], [], '-', c='#1f77b4', lw=2, alpha=0.8)[0] for _ in pose_links] if pts_pose else []
+        lines_right = [ax_right.plot([], [], [], '-', c='gray', lw=1.5, alpha=0.8)[0] for _ in hand_links] if pts_right else []
 
         # initialize the 1D metric plots (bottom rows)
         tracker_lines = []
@@ -725,19 +765,18 @@ class Visualizer:
             if i == num_metrics - 1:
                 ax_m.set_xlabel('Time [s]', fontsize=10)
 
-        #plt.tight_layout()
-
         # defines the update function
         def update(frame):
             updated_artists = []
 
             # helper to update the 3D skeletons
-            def update_skeleton(lm_dict, pts, lines, links):
+            def update_skeleton(lm_dict, pts, lines, links, diag=None, side_focused=None, current_ex=''):
 
                 # return for missing data
                 if not lm_dict or not pts:
                     return
 
+                # update the base skeleton points
                 xs = [lm_dict[key][0][frame] for key in lm_dict.keys()]
                 ys = [lm_dict[key][1][frame] for key in lm_dict.keys()]
                 zs = [lm_dict[key][2][frame] for key in lm_dict.keys()]
@@ -745,25 +784,94 @@ class Visualizer:
                 pts.set_3d_properties(zs)
                 updated_artists.append(pts)
 
-                for line, link in zip(lines, links):
-                    lm1, lm2 = link
+                # update the base skeleton lines
+                for line, segment in zip(lines, links):
+                    lm1, lm2 = segment
                     if lm1 in lm_dict and lm2 in lm_dict:
                         line.set_data([lm_dict[lm1][0][frame], lm_dict[lm2][0][frame]],
                                       [lm_dict[lm1][1][frame], lm_dict[lm2][1][frame]])
                         line.set_3d_properties([lm_dict[lm1][2][frame], lm_dict[lm2][2][frame]])
                         updated_artists.append(line)
 
+                # update diagnostic markers
+                if diag and side_focused:
+                    side_idx = '1' if side_focused == 'L' else '2'
+                    w_k = f'wrist{side_idx}'
+
+                    if 'FingerTapping' in current_ex:
+                        f_k = f'ftip{side_idx}2'
+                        if w_k in lm_dict and f_k in lm_dict:
+                            diag['dot_w'].set_data([lm_dict[w_k][0][frame]], [lm_dict[w_k][1][frame]])
+                            diag['dot_w'].set_3d_properties([lm_dict[w_k][2][frame]])
+                            diag['dot_f'].set_data([lm_dict[f_k][0][frame]], [lm_dict[f_k][1][frame]])
+                            diag['dot_f'].set_3d_properties([lm_dict[f_k][2][frame]])
+                            diag['band'].set_data([lm_dict[w_k][0][frame], lm_dict[f_k][0][frame]],
+                                                  [lm_dict[w_k][1][frame], lm_dict[f_k][1][frame]])
+                            diag['band'].set_3d_properties([lm_dict[w_k][2][frame], lm_dict[f_k][2][frame]])
+                            updated_artists.extend([diag['dot_w'], diag['dot_f'], diag['band']])
+
+                    elif 'FingerAlternation' in current_ex:
+                        t_k = f'ftip{side_idx}1'
+                        f_keys = [f'ftip{side_idx}{d}' for d in range(2, 6)]
+                        if w_k in lm_dict and t_k in lm_dict and all(fk in lm_dict for fk in f_keys):
+                            diag['dot_w'].set_data([lm_dict[w_k][0][frame]], [lm_dict[w_k][1][frame]])
+                            diag['dot_w'].set_3d_properties([lm_dict[w_k][2][frame]])
+                            diag['dot_t'].set_data([lm_dict[t_k][0][frame]], [lm_dict[t_k][1][frame]])
+                            diag['dot_t'].set_3d_properties([lm_dict[t_k][2][frame]])
+                            updated_artists.extend([diag['dot_w'], diag['dot_t']])
+
+                            for index, fk in enumerate(f_keys):
+                                diag['dots_f'][index].set_data([lm_dict[fk][0][frame]], [lm_dict[fk][1][frame]])
+                                diag['dots_f'][index].set_3d_properties([lm_dict[fk][2][frame]])
+                                diag['bands'][index].set_data([lm_dict[t_k][0][frame], lm_dict[fk][0][frame]],
+                                                              [lm_dict[t_k][1][frame], lm_dict[fk][1][frame]])
+                                diag['bands'][index].set_3d_properties([lm_dict[t_k][2][frame], lm_dict[fk][2][frame]])
+                                updated_artists.extend([diag['dots_f'][index], diag['bands'][index]])
+
+                    elif 'HandOpening' in current_ex:
+                        f_keys = [f'ftip{side_idx}{d}' for d in range(2, 6)]
+                        if w_k in lm_dict and all(fk in lm_dict for fk in f_keys):
+                            diag['dot_w'].set_data([lm_dict[w_k][0][frame]], [lm_dict[w_k][1][frame]])
+                            diag['dot_w'].set_3d_properties([lm_dict[w_k][2][frame]])
+                            updated_artists.append(diag['dot_w'])
+
+                            for index, fk in enumerate(f_keys):
+                                diag['dots_f'][index].set_data([lm_dict[fk][0][frame]], [lm_dict[fk][1][frame]])
+                                diag['dots_f'][index].set_3d_properties([lm_dict[fk][2][frame]])
+                                diag['bands'][index].set_data([lm_dict[w_k][0][frame], lm_dict[fk][0][frame]],
+                                                              [lm_dict[w_k][1][frame], lm_dict[fk][1][frame]])
+                                diag['bands'][index].set_3d_properties([lm_dict[w_k][2][frame], lm_dict[fk][2][frame]])
+                                updated_artists.extend([diag['dots_f'][index], diag['bands'][index]])
+
+                    elif 'ProSup' in current_ex:
+                        if w_k in lm_dict and 'active' in rot_matrices:
+                            R = rot_matrices['active'][frame]
+                            w_pos = np.array([lm_dict[w_k][0][frame], lm_dict[w_k][1][frame], lm_dict[w_k][2][frame]])
+
+                            # Draw 8cm axes (X=Red, Y=Green, Z=Blue)
+                            ax_length = 0.08
+                            for ax_idx, ax_key in enumerate(['axis_x', 'axis_y', 'axis_z']):
+                                end_pos = w_pos + R[:, ax_idx] * ax_length
+                                diag[ax_key].set_data([w_pos[0], end_pos[0]], [w_pos[1], end_pos[1]])
+                                diag[ax_key].set_3d_properties([w_pos[2], end_pos[2]])
+                                updated_artists.append(diag[ax_key])
+
             # update the skeleton positions for the animation
-            update_skeleton(dashboard_data.get('right_hand'), pts_right, lines_right, hand_links)
-            update_skeleton(dashboard_data.get('pose'), pts_pose, lines_pose, pose_links)
-            update_skeleton(dashboard_data.get('left_hand'), pts_left, lines_left, hand_links)
+
+            update_skeleton(dashboard_data['left_hand'], pts_left, lines_left, hand_links, diag_l,
+                            'L' if side_focus == 'L' else None, current_ex=ex_id)
+
+            update_skeleton(dashboard_data['pose'], pts_pose, lines_pose, pose_links, current_ex=ex_id)
+
+            update_skeleton(dashboard_data['right_hand'], pts_right, lines_right, hand_links, diag_r,
+                            'R' if side_focus == 'R' else None, current_ex=ex_id)
 
             # update the 1D red tracker lines
-            for vline, t_arr in tracker_lines:
+            for v_line, t_array in tracker_lines:
                 # grab the time at the current frame (in case arrays differ slightly in length)
-                idx = min(frame, len(t_arr) - 1)
-                vline.set_xdata([t_arr[idx], t_arr[idx]])
-                updated_artists.append(vline)
+                idx = min(frame, len(t_array) - 1)
+                v_line.set_xdata([t_array[idx], t_array[idx]])
+                updated_artists.append(v_line)
 
             return updated_artists
 
@@ -772,7 +880,7 @@ class Visualizer:
         out_path = os.path.join(self.kinematics_quality_res_path, f_name)
 
         # render to videos (mp4)
-        print(f"Rendering the quality check dashboard to {out_path}...")
+        #print(f"Rendering the quality check dashboard to {out_path}...")
         interval_ms = (1000.0 / self.fps) * skip_frames
 
         # run the animation

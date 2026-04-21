@@ -2,6 +2,7 @@
 
 # libraries
 import os
+import re
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -123,6 +124,29 @@ def load_participants(parquet_file_paths: list) -> None:
             # 6) data processing phase
             # load
             raw_df: pd.DataFrame = ex.load_dataframe('raw')
+
+            # --- TEMPORARY FIX: Left/Right Label Swapper ---
+            # Create a dictionary to map the old reversed names to the correct new names
+            swap_map = {}
+            # all lateralized joint prefixes (hands and pose)
+            prefixes = r'(wrist|mcp|pip|dip|ip|cmc|ftip|shoulder|elbow|hip|knee|ankle|heel|foot|eye|clavicle)'
+
+            for col in raw_df.columns:
+                if 'left' in col:
+                    swap_map[col] = col.replace('left', 'right')
+                elif 'right' in col:
+                    swap_map[col] = col.replace('right', 'left')
+                elif re.search(f'^{prefixes}1', col):
+                    # swaps '1' to '2' only if it immediately follows a known prefix at the start of the string
+                    swap_map[col] = re.sub(f'^{prefixes}1', r'\g<1>2', col)
+                elif re.search(f'^{prefixes}2', col):
+                    # swaps '2' to '1' only if it immediately follows a known prefix at the start of the string
+                    swap_map[col] = re.sub(f'^{prefixes}2', r'\g<1>1', col)
+
+            # Apply the renaming
+            raw_df.rename(columns=swap_map, inplace=True)
+            # -----------------------------------------------
+
             # filter
             clean_df: pd.DataFrame = tb.filter_landmark_dataframe(raw_df)
             # save
