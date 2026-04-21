@@ -20,9 +20,9 @@ class Exercise:
     exercise_id: str                                # 'FingerTapping', 'HandOpening', etc.
     side_condition: str                             # 'Healthy' or 'Affected'
     side_focus: str                                 # 'L' or 'R'
-
-    # metadata
     cam_id: str                                     # e.g., 'camZ'
+    left_hand_size: float = 0.0
+    right_hand_size: float = 0.0
 
     # data storage
     raw_landmark_data_path: str = ''                # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ.parquet'
@@ -80,10 +80,6 @@ class Participant:
         self.pid = pid                                  # participant identifier ('P001', 'P002', ...)
         self.visit_id = visit_id                        # visit identifier ('T1', 'T2', 'T3')
         self.affected_side = affected_side              # 'Healthy' or 'Affected'
-
-        # additional attributes
-        self.left_hand_size: float = 0.0                # median hand size 'left' across all exercises
-        self.right_hand_size: float = 0.0               # median hand size 'right' across all exercises
 
         # storage: e.g., "FingerTapping_Affected"
         self.exercises: dict[str, Exercise] = {}
