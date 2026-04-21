@@ -3,11 +3,11 @@
 
 # libraries
 import os
-import numpy as np
+from tqdm import tqdm
 
 # modules
 from src.config import config, project_path
-from src.core import Participant, Exercise
+from src.core import Participant
 from src.exercise_evaluation import ExerciseEvaluator
 from src.utils import save_extracted_data_to_csv
 
@@ -25,34 +25,8 @@ def run_kinematics_extractor(save_plots: bool = True):
     all_extracted_features_lst: list = []
 
     # run for each participant and each visit
-    for pickle_file in participant_pickle_lst:
+    for pickle_file in tqdm(participant_pickle_lst, desc='Extracting Kinematic Features'):
         p: Participant = Participant.load(os.path.join(participant_objs_path, pickle_file))
-
-        # calculate the global hand size (median)
-        left_hand_sizes: list = []
-        right_hand_sizes: list = []
-
-        # iterate across each exercise for a given participant
-        for ex in p.exercises.values():
-            lms = ex.clean_hand_landmarks
-            if not lms:
-                continue
-
-            # calculate the median hand size for the left hand (distance: wrist1 - mcp13)
-            if 'wrist1' in lms and 'mcp13' in lms:
-                diff_left: np.ndarray = np.array(lms['wrist1']) - np.array(lms['mcp13'])
-                dist_left: np.ndarray = np.linalg.norm(diff_left, axis=0)
-                left_hand_sizes.extend(dist_left)
-
-            # calculate the median hand size for the right hand (distance: wrist1 - mcp13)
-            if 'wrist2' in lms and 'mcp23' in lms:
-                diff_right: np.ndarray = np.array(lms['wrist2']) - np.array(lms['mcp23'])
-                dist_right: np.ndarray = np.linalg.norm(diff_right, axis=0)
-                right_hand_sizes.extend(dist_right)
-
-        # add the median value to the hand size attribute of the Participant object
-        p.left_hand_size = float(np.median(left_hand_sizes)) if left_hand_sizes else 0.0
-        p.right_hand_size = float(np.median(right_hand_sizes)) if right_hand_sizes else 0.0
 
         # loop through every exercise this participant performed
         for ex_key, exercise in p.exercises.items():
@@ -66,39 +40,41 @@ def run_kinematics_extractor(save_plots: bool = True):
                              'side_condition': exercise.side_condition,
                              'cam_ID': exercise.cam_id}
 
-            # Determine which hand size to pass to the evaluator
-            active_hand_size = p.left_hand_size if exercise.side_focus == 'L' else p.right_hand_size
+            # get the hand size
+            active_hand_size: float = exercise.left_hand_size if exercise.side_focus == 'L' else exercise.right_hand_size
+
+            # safety fallback
+            if active_hand_size == 0.0:
+                print(f'Warning: Hand size 0.0 for {ex_key}. Check loader output.')
+                active_hand_size = 1e-8
 
             try:
                 metrics: dict = {}
                 if 'FingerTapping' in ex_key:
                     metrics = ex_eval.analyze_finger_tapping(exercise, p.pid, active_hand_size, save_plots)
-                    exercise.metrics = metrics
                 elif 'FingerAlternation' in ex_key:
                     metrics = ex_eval.analyze_finger_alternation(exercise, active_hand_size, save_plots)
-                    exercise.metrics = metrics
                 elif 'HandOpening' in ex_key:
                     metrics = ex_eval.analyze_hand_opening(exercise, p.pid, active_hand_size, save_plots)
-                    exercise.metrics = metrics
                 elif 'ProSup' in ex_key:
                     metrics = ex_eval.analyze_pronation_supination(exercise, p.pid, save_plots)
-                    exercise.metrics = metrics
 
                 # add the extracted metrics to the metadata
-                row_meta_data.update(metrics)
-
-                # append the row data to the main list
-                all_extracted_features_lst.append(row_meta_data)
+                if metrics:
+                    exercise.metrics = metrics
+                    row_meta_data.update(metrics)
+                    all_extracted_features_lst.append(row_meta_data)
 
             except Exception as e:
                 print(f'Error extracting {ex_key} for {p.pid}: {e}')
 
         # 'update' (overwrites) the participant object file with the new metrics data.
         p.save(participant_objs_path)
-        print(f"Successfully updated pickle file for {p.pid}_{p.visit_id}")
 
     # save the extracted features to a csv file
-    save_extracted_data_to_csv(all_extracted_features_lst, out_dir=os.path.join(project_path, 'data', '04_features'))
+    feature_dir: str = os.path.join(project_path, 'data', '04_features')
+    os.makedirs(feature_dir, exist_ok=True)
+    save_extracted_data_to_csv(all_extracted_features_lst, out_dir=feature_dir)
 
 
 if __name__ == '__main__':

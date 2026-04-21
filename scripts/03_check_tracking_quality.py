@@ -15,7 +15,7 @@ from src.utils import ToolBox
 from src.visualization import Visualizer
 
 
-def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.DataFrame:
+def get_hand_segment_stability(p: Participant) -> pd.DataFrame:
     """
     Calculates segment lengths and normalizes them by anatomical hand size (sum of wrist to middle finger knuckle plus
     each middle finger segment). Calculates the Coefficient of Variance (CoV) for each body segment for both the
@@ -23,7 +23,6 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
 
     Args:
         p (Participant): list of participant objects of the class Participant.
-        ref_hand_size_dict (dict): dictionary of reference hand sizes for each participant.
 
     Returns:
         pd.dataframe: A dataframe containing the CoV of each body segment for both hands.
@@ -36,9 +35,6 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
     # tracking consistency test using all participants and exercises
     results_lst: list = []
     tb: ToolBox = ToolBox()
-
-    # get the reference dict of the current participant
-    participant_ref_dict: dict = ref_hand_size_dict.get(p.pid, {})
 
     # run for each exercise
     for ex_key, ex in p.exercises.items():
@@ -59,7 +55,7 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
                 'link_idx': link_lst[:len(link_lst)//2] if active_side == 'L' else link_lst[len(link_lst)//2:]
             },
             'Passive': {
-                'side_lr': passive_side,
+                'side': passive_side,
                 'condition': passive_condition,
                 'link_idx': link_lst[:len(link_lst)//2] if passive_side == 'L' else link_lst[len(link_lst)//2:]
             }
@@ -75,21 +71,15 @@ def get_hand_segment_stability(p: Participant, ref_hand_size_dict: dict) -> pd.D
         for role, role_info in hand_roles.items():
             curr_link_lst = role_info['link_idx']
             condition = role_info['condition']
+            current_side = role_info['side']   # 'L' or 'R'
 
-            # get the median hand size using the correct keys ('Affected' or 'Healthy')
-            med_hand_size: float = participant_ref_dict.get(condition, 0.0)
+            # get the pre-calculated, exercise-specific median hand size
+            med_hand_size: float = ex.left_hand_size if current_side == 'L' else ex.right_hand_size
 
             # handle missing median hand size
             if med_hand_size == 0.0:
-                opposite_condition = 'Healthy' if condition == 'Affected' else 'Affected'
-                med_hand_size = participant_ref_dict.get(opposite_condition, 0.0)
-
-                if med_hand_size > 0.0:
-                    print(f'Warning: Participant {p.pid} used the "{opposite_condition}" hand size to normalize '
-                          f'the "{condition}" ({role}) segments in "{ex_key}".')
-                else:
-                    print(f'Error: No median hand size for participant {p.pid}. Skipping {role} hand in {ex_key}.')
-                    continue
+                print(f'Error: Hand size is 0.0 for {current_side} hand in {ex_key}. Skipping {role} role.')
+                continue
 
             # calculate the length of each hand segment
             segment_len_df: pd.DataFrame = tb.calculate_3d_segment_lengths(exercise_df, curr_link_lst)
@@ -351,9 +341,8 @@ def run_temporal_consistency_check():
     for pickle_file in tqdm(participant_pickle_lst, desc='Running temporal consistency check...'):
         p: Participant = Participant.load(os.path.join(participant_objs_path, pickle_file))
 
-        # determine coefficients of variation for each hand segment
-        hand_size_dict: dict = tb.determine_best_hand_reference(p)
-        hand_cov_res_df: pd.DataFrame = get_hand_segment_stability(p, hand_size_dict)
+        # determine coefficients of variation (CoV) for each hand segment
+        hand_cov_res_df: pd.DataFrame = get_hand_segment_stability(p)
         all_hand_cov_df_lst.append(hand_cov_res_df)
 
         # determine coefficients of variation for each hand segment

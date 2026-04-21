@@ -37,7 +37,7 @@ def run_participant_loader():
                 new_name: str = x[:-8] + '_raw.parquet'
                 new_filepath: str = os.path.join(tracked_data_dir, new_name)
                 os.rename(file_path, new_filepath)
-                file_path: str = new_filepath
+                file_path = new_filepath
 
             tracked_data_path_lst.append(file_path)
 

@@ -4,6 +4,8 @@ import pydoc
 # libraries
 import numpy as np
 import editdistance
+import pandas as pd
+from scipy.spatial.transform import Rotation
 
 # modules
 from src.config import config
@@ -32,7 +34,7 @@ class ExerciseEvaluator:
                                'prominence_factor': 0.35,
                                'distance_factor': 0.35}
 
-    def _extract_distance_based_kinematics(self, landmark_data: dict, dynamic_norm_arr: np.ndarray,
+    def _extract_distance_based_kinematics(self, df: pd.DataFrame, dynamic_norm_arr: np.ndarray,
                                            static_hand_size: float, ref_landmark_name: str,
                                            target_landmark_names: list, custom_peak_cfg: dict = None) -> dict:
         """
@@ -52,22 +54,36 @@ class ExerciseEvaluator:
             dict: Nested dictionary containing normalized distances and feature parameters.
         """
         performance_dict = {}
-        ref_point_lst = landmark_data[ref_landmark_name]
 
         # determine the config to use
         current_cfg = custom_peak_cfg if custom_peak_cfg else self.peak_cfg
 
+        # extract the (frames, 3) tensor for the reference landmarks
+        ref_cols: list = [f'{ref_landmark_name}_x', f'{ref_landmark_name}_y', f'{ref_landmark_name}_z']
+
+        try:
+            ref_pos: np.ndarray = df[ref_cols].to_numpy()
+        except KeyError:
+            print(f'Error: reference landmark {ref_landmark_name} not found in dataframe.')
+            return {}
+
         for target_name in target_landmark_names:
-            target_point_lst = landmark_data[target_name]
+            target_cols = [f'{target_name}_x', f'{target_name}_y', f'{target_name}_z']
+            try:
+                target_pos: np.ndarray = df[target_cols].to_numpy()
+            except KeyError:
+                print(f'Error: target landmark {target_cols} not found. Skipping.')
+                continue
 
             # calculate the absolute raw distance
-            raw_dist = self.tb.calc_euclidean_dist(ref_point_lst, target_point_lst)
+            raw_dist = np.linalg.norm(ref_pos - target_pos, axis=1)
 
             # specifically to find peaks
-            smoothing_signal = raw_dist / dynamic_norm_arr
+            safe_dynamic_norm = np.where(dynamic_norm_arr == 0, 1e-8, dynamic_norm_arr)
+            smoothing_signal = raw_dist / safe_dynamic_norm
 
             # distance used for final distance measurement
-            norm_dist_arr = raw_dist / static_hand_size
+            norm_dist_arr = raw_dist / max(static_hand_size, 1e-8)
 
             # peak extraction
             feature_dict = self.kf.calc_kinematic_parameters(smoothing_signal, current_cfg)
@@ -76,7 +92,6 @@ class ExerciseEvaluator:
             valid_peaks = feature_dict.get('valid_peaks_idx', [])
             if len(valid_peaks) > 0:
                 peak_amplitudes = norm_dist_arr[valid_peaks]
-                feature_dict
 
                 feature_dict['amplitude_mean'] = float(np.mean(peak_amplitudes))
                 feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amplitudes, 90))
@@ -90,36 +105,6 @@ class ExerciseEvaluator:
 
         return performance_dict
 
-    def _align_hands(self, exercise: Exercise) -> None:
-
-        # helper function to find the first digit in the landmark name (first digit distinguishes left and right)
-        def get_hand_id(key_str: str) -> str:
-            for char in key_str:
-                if char.isdigit():
-                    return char
-            return None
-
-        # split hands into left and right
-        left_hand_dict: dict = {k: v for k, v in exercise.clean_hand_landmarks.items() if get_hand_id(k) == '1'}
-        right_hand_dict: dict = {k: v for k, v in exercise.clean_hand_landmarks.items() if get_hand_id(k) == '2'}
-
-        aligned_hands: dict = {}
-
-        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            # align left hand
-            if left_hand_dict:
-                aligned_left: dict = self.tb.realign_hand_to_y_axis(left_hand_dict, side_idx=1)
-                aligned_hands.update(aligned_left)
-            if right_hand_dict:
-                aligned_right: dict = self.tb.realign_hand_to_y_axis(right_hand_dict, side_idx=2)
-                aligned_hands.update(aligned_right)
-        else:
-            # trust global coordinates (for non MediaPipe data)
-            aligned_hands = exercise.clean_hand_landmarks.copy()
-
-        # save aligned hands to the corresponding Exercise attribute
-        exercise.aligned_hand_landmarks = aligned_hands
-
     def analyze_finger_tapping(self, exercise: Exercise, p_id: str, p_hand_size: float, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
@@ -129,40 +114,34 @@ class ExerciseEvaluator:
         # modify landmark names to hold the side information (left: 1, right: 2)
         lm_base_names: list = config['index_ftap']['landmark_names']
         lm_corr_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names]
-        anchor, target = lm_corr_names[0], lm_corr_names[1]
+        anchor = f'wrist{active_side_idx}'  # wrist
+        target = lm_corr_names[1]           # index fingertip
         pair_key: str = f'{anchor}-{target}'
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['index_ftap'].get('peak_cfg', self.peak_cfg)
 
-        # DATA PREPARATION: dynamic normalization
-        # define landmarks for normalization
-        wrist_key: str = f'wrist{active_side_idx}'
-        mcp_key: str = f'mcp{active_side_idx}3'         # left: mcp13, right: mcp23
+        # load the cleaned DataFrame directly
+        try:
+            df: pd.DataFrame = exercise.load_dataframe('clean')
+        except FileNotFoundError:
+            print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
+            return {}
 
-        # get aligned hands
-        if not getattr(exercise, 'aligned_hand_landmarks', None):
-            self._align_hands(exercise)
-
-        # safety check for missing hand
-        if wrist_key not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
-            raise ValueError(f"Active hand landmarks ({wrist_key}, {mcp_key}) not detected.")
-
-        # calculate the frame-by-frame dynamic palm length (cancel MediaPipe scale jitter)
-        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.aligned_hand_landmarks[wrist_key],
-                                                                       exercise.aligned_hand_landmarks[mcp_key])
-        else:
-            # pose estimation data other than MediaPipe does not apply this dynamic smoothing
-            dynamic_palm_arr: np.ndarray = np.full(len(exercise.aligned_hand_landmarks[wrist_key][0]), 1.0)
+        # dynamic palm scaling
+        dynamic_palm_arr: np.ndarray = np.ones(len(df))
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
+        active_dist_dict: dict = self._extract_distance_based_kinematics(df,
                                                                          dynamic_palm_arr,  # for peak detection
                                                                          p_hand_size,       # for feature scaling
                                                                          anchor,
                                                                          [target],
                                                                          ex_peak_cfg)
+
+        # handle missing key pair
+        if pair_key not in active_dist_dict:
+            return {}
 
         # 1.2) correctness of the tapping (spatial accuracy)
         valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valleys_idx']
@@ -176,20 +155,18 @@ class ExerciseEvaluator:
 
             # results
             mean_target_error: float = float(np.mean(valley_dist_arr))
-            successful_taps: int = np.sum(np.where(valley_dist_arr < valid_dist, 1, 0))
+            successful_taps: int = np.sum(valley_dist_arr < valid_dist)
             accuracy_percentage: float = float((successful_taps / len(valid_valley_idc)) * 100)
         else:
             mean_target_error: float = 0.0
             accuracy_percentage: float = 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
-
         # 1.3.1) calculate the tapping rhythm with CoV
         if len(valid_valley_idc) > 1:
             tapping_diff: np.ndarray = np.diff(valid_valley_idc)
             tapping_mean: float = float(np.mean(tapping_diff))
-            tapping_std: float = float(np.std(tapping_diff))
-            tapping_cov: float = float((tapping_std / tapping_mean) * 100) if tapping_mean > 0 else 0.0
+            tapping_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
 
             # dynamic window for isolation (33% of a period)
             half_window: int = max(int(tapping_mean / 6.0), 2)
@@ -199,9 +176,10 @@ class ExerciseEvaluator:
 
         # 1.3.2) calculate the tapping isolation
         passive_fingers: list = lm_corr_names[2:]
+        wrist_key = f'wrist{active_side_idx}'
 
         # calculate Euclidean distance for passive fingers
-        passive_kinematics: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
+        passive_kinematics: dict = self._extract_distance_based_kinematics(df,
                                                                            dynamic_palm_arr,
                                                                            p_hand_size,
                                                                            wrist_key,
@@ -210,8 +188,8 @@ class ExerciseEvaluator:
         # calculate the isolation variances
         isolation_variances: list = []
         for tap_idx in valid_valley_idc:
-            for passive_kin_key in passive_kinematics.keys():
-                dist_arr: np.ndarray = passive_kinematics[passive_kin_key]['normalized_distance']
+            for passive_kin_key, p_data in passive_kinematics.items():
+                dist_arr: np.ndarray = p_data['normalized_distance']
                 start: int = max(0, tap_idx - half_window)
                 end: int = min(len(dist_arr), tap_idx + half_window)
                 if start < end:
@@ -233,7 +211,7 @@ class ExerciseEvaluator:
         # add exercise specific prefix-key 'idx_tap'
         results = {
             # time series
-            'idx_tap_time_series_y': performance_features.get('signal_detrended', []),
+            'idx_tap_time_series_y': performance_features.get('signal_original', []),
             'idx_tap_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'idx_tap_rep_num': performance_features.get('repetition_num', 0.0),
@@ -286,26 +264,18 @@ class ExerciseEvaluator:
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['ftap_alter'].get('peak_cfg', self.peak_cfg)
 
-        # DATA PREPARATION: dynamic normalization
-        wrist_key: str = f'wrist{active_side_idx}'
-        mcp_key: str = f'mcp{active_side_idx}3'
+        # load the cleaned DataFrame directly
+        try:
+            df: pd.DataFrame = exercise.load_dataframe('clean')
+        except FileNotFoundError:
+            print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
+            return {}
 
-        # get aligned hands
-        if not getattr(exercise, 'aligned_hand_landmarks', None):
-            self._align_hands(exercise)
-
-        # safety check
-        if wrist_key not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
-            raise ValueError(f"Active hand landmarks ({wrist_key}, {mcp_key}) not detected.")
-
-        if getattr(exercise, 'tracker_type', 'mediapipe') == 'mediapipe':
-            dynamic_palm_arr: np.ndarray = self.tb.calc_euclidean_dist(exercise.aligned_hand_landmarks[wrist_key],
-                                                                       exercise.aligned_hand_landmarks[mcp_key])
-        else:
-            dynamic_palm_arr: np.ndarray = np.full(len(exercise.aligned_hand_landmarks[wrist_key][0]), 1.0)
+        # dynamic palm scaling
+        dynamic_palm_arr: np.ndarray = np.ones(len(df))
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
-        active_dist_dict: dict = self._extract_distance_based_kinematics(exercise.aligned_hand_landmarks,
+        active_dist_dict: dict = self._extract_distance_based_kinematics(df,
                                                                          dynamic_palm_arr,
                                                                          p_hand_size,
                                                                          thumb,
@@ -317,8 +287,7 @@ class ExerciseEvaluator:
         # extract tapping idc list for each finger digit
         finger_tapping_idc_lst: list = []
         for finger_key, val in active_dist_dict.items():
-            tapping_idc_lst: list = [(int(finger_key[-1]), x) for x in val['features']['valid_valleys_idx']]
-            finger_tapping_idc_lst += tapping_idc_lst
+            finger_tapping_idc_lst += [(int(finger_key[-1]), x) for x in val['features']['valid_valleys_idx']]
 
         # sort the indices of each finger by the second tuple element (index number): [(1, '153'), (2, '153'), ...]
         finger_tapping_idc_lst = sorted(finger_tapping_idc_lst, key=lambda x: x[1])
@@ -381,8 +350,7 @@ class ExerciseEvaluator:
         if len(tapping_sequence_idc_lst) > 1:
             tapping_diff: np.ndarray = np.diff(tapping_sequence_idc_lst)
             tapping_mean: float = float(np.mean(tapping_diff))
-            tapping_std: float = float(np.std(tapping_diff))
-            tapping_cov: float = float((tapping_std / tapping_mean) * 100) if tapping_mean > 0 else 0.0
+            tapping_cov: float = float((float(np.std(tapping_diff))/ tapping_mean) * 100) if tapping_mean > 0 else 0.0
         else:
             tapping_mean: float = 0.0
             tapping_cov: float = 0.0
@@ -423,7 +391,7 @@ class ExerciseEvaluator:
         alt_tap_x: list = []
         for fn in finger_names:
             p_feat = active_dist_dict[f'{thumb}-{fn}']['features']
-            alt_tap_y.append(p_feat.get('signal_detrended', []))
+            alt_tap_y.append(p_feat.get('signal_original', []))
             alt_tap_x.append(p_feat.get('time_axis', []))
 
         # 2) extract general metrics (e.g., task impairment by spectrogram)
@@ -482,57 +450,39 @@ class ExerciseEvaluator:
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['open_close'].get('peak_cfg', self.peak_cfg)
 
-        # DATA PREPARATION: dynamic normalization
-        mcp_key: str = f'mcp{active_side_idx}3'
-
-        # get aligned hands
-        if not getattr(exercise, 'aligned_hand_landmarks', None):
-            self._align_hands(exercise)
-
-        # safety check
-        if wrist_name not in exercise.aligned_hand_landmarks or mcp_key not in exercise.aligned_hand_landmarks:
-            raise ValueError(f"Active hand landmarks ({wrist_name}, {mcp_key}) not detected.")
+        # load the cleaned DataFrame directly
+        try:
+            df: pd.DataFrame = exercise.load_dataframe('clean')
+        except FileNotFoundError:
+            print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
+            return {}
 
         active_dist_dict: dict = {}
         finger_digits = ['2', '3', '4', '5']        # index, middle, ring, pinky
 
-        def _to_nx3(lm_lst: list):
-            arr: np.ndarray = np.array(lm_lst)
-            if arr.shape[0] == 3 and arr.shape[1] > 3:
-                return arr.T
-            return arr
-
-        # extract the 3D coordinates for all joints - transpose arrays from (3, N) to (N, 3)
         for digit in finger_digits:
-            lm_wrist = exercise.aligned_hand_landmarks[wrist_name]
-            lm_mcp = exercise.aligned_hand_landmarks[f'mcp{active_side_idx}{digit}']
-            lm_pip = exercise.aligned_hand_landmarks[f'pip{active_side_idx}{digit}']
-            lm_dip = exercise.aligned_hand_landmarks[f'dip{active_side_idx}{digit}']
-            lm_ftip = exercise.aligned_hand_landmarks[f'ftip{active_side_idx}{digit}']
+            # vectorized matrix extraction from dataframe
+            wrist_arr = df[[f'{wrist_name}_x', f'{wrist_name}_y', f'{wrist_name}_z']].to_numpy()
+            mcp_arr = df[[f'mcp{active_side_idx}{digit}_x', f'mcp{active_side_idx}{digit}_y', f'mcp{active_side_idx}{digit}_z']].to_numpy()
+            pip_arr = df[[f'pip{active_side_idx}{digit}_x', f'pip{active_side_idx}{digit}_y', f'pip{active_side_idx}{digit}_z']].to_numpy()
+            dip_arr = df[[f'dip{active_side_idx}{digit}_x', f'dip{active_side_idx}{digit}_y', f'dip{active_side_idx}{digit}_z']].to_numpy()
+            ftip_arr = df[[f'ftip{active_side_idx}{digit}_x', f'ftip{active_side_idx}{digit}_y', f'ftip{active_side_idx}{digit}_z']].to_numpy()
 
             # calculate the total kinematic chain ratio (KCR)
 
             # direct distance from fingertip landmarks to the wrist landmark
-            dist_ftip_wrist = self.tb.calc_euclidean_dist(lm_ftip, lm_wrist)
+            dist_ftip_wrist = np.linalg.norm(ftip_arr - wrist_arr, axis=1)
 
             # distance measured by the sum of each segment - reference length for each frame
-            sum_segments = (self.tb.calc_euclidean_dist(lm_mcp, lm_wrist) +
-                            self.tb.calc_euclidean_dist(lm_pip, lm_mcp) +
-                            self.tb.calc_euclidean_dist(lm_dip, lm_pip) +
-                            self.tb.calc_euclidean_dist(lm_ftip, lm_dip))
+            sum_segments = (np.linalg.norm(mcp_arr - wrist_arr, axis=1) +
+                            np.linalg.norm(pip_arr - mcp_arr, axis=1) +
+                            np.linalg.norm(dip_arr - pip_arr, axis=1) +
+                            np.linalg.norm(ftip_arr - dip_arr, axis=1))
 
             # clipping the KCR to the range 0.0-1.0 prevents values > 1.0 due to noise or hyperextension
-            kcr_arr: np.ndarray = np.clip(dist_ftip_wrist / np.clip(sum_segments, 1e-8, None), 0.0, 1.0)
+            kcr_arr = np.clip(dist_ftip_wrist / np.clip(sum_segments, 1e-8, None), 0.0, 1.0)
 
             # calculate the angle composite score
-
-            wrist_arr: np.ndarray = _to_nx3(lm_wrist)
-            mcp_arr: np.ndarray = _to_nx3(lm_mcp)
-            pip_arr: np.ndarray = _to_nx3(lm_dip)
-            dip_arr: np.ndarray = _to_nx3(lm_dip)
-            ftip_arr: np.ndarray = _to_nx3(lm_ftip)
-
-            # get segment vectors from segement coordinates
             vec_mw: np.ndarray = mcp_arr - wrist_arr
             vec_pm: np.ndarray = pip_arr - mcp_arr
             vec_dp: np.ndarray = dip_arr - pip_arr
@@ -575,11 +525,11 @@ class ExerciseEvaluator:
         all_valley_kcr: list = []
         all_valley_ang: list = []
 
-        for finger_id in active_dist_dict.keys():
-            kcr = active_dist_dict[finger_id]['normalized_distance']
-            ang = active_dist_dict[finger_id]['angle_score']
-            peaks = active_dist_dict[finger_id]['features']['valid_peaks_idx']
-            valleys = active_dist_dict[finger_id]['features']['valid_valleys_idx']
+        for finger_data in active_dist_dict.values():
+            kcr = finger_data['normalized_distance']
+            ang = finger_data['angle_score']
+            peaks = finger_data['features']['valid_peaks_idx']
+            valleys = finger_data['features']['valid_valleys_idx']
 
             all_peak_kcr.extend(kcr[peaks])
             all_peak_ang.extend(ang[peaks])
@@ -587,10 +537,10 @@ class ExerciseEvaluator:
             all_valley_ang.extend(ang[valleys])
 
         # extension score (hand open)
-        if all_peak_kcr:
-            ext_kcr_score: float = np.mean(all_peak_kcr) * 100.0
-            ext_ang_score: float = np.mean(all_peak_ang) * 100.0
-            extension_score: float = (ext_kcr_score + ext_ang_score) / 2.0
+        all_peak_kcr_arr: np.ndarray = np.array(all_peak_kcr)
+        all_peak_ang_arr: np.ndarray = np.array(all_peak_ang)
+        if all_peak_kcr_arr.size > 0 and all_peak_ang_arr.size > 0:
+            extension_score: float = float((np.mean(all_peak_kcr) * 100 + np.mean(all_peak_ang) * 100) / 2.0)
         else:
             extension_score: float = 0.0
 
@@ -599,11 +549,11 @@ class ExerciseEvaluator:
             # map KCR to 100% (assumption: 0.25 is a perfectly tight fist) <- this value may require tuning in config
             min_dist_kcr: float = config['open_close'].get('fist_min_dist', 0.25)
             kcr_mapped: np.ndarray = np.clip(1.0 - (np.array(all_valley_kcr) - min_dist_kcr) / (1.0 - min_dist_kcr), 0.0, 1.0)
-            flex_kcr_score: float = float(np.mean(kcr_mapped) * 100.0)
+            flex_kcr_score: float = float(np.mean(kcr_mapped) * 100)
 
             # angle score 0.0 is perfect flexion -> map to 100%
             ang_mapped: np.ndarray = np.clip(1.0 - np.array(all_valley_ang), 0.0, 1.0)
-            flex_ang_score: float = float(np.mean(ang_mapped) * 100.0)
+            flex_ang_score: float = float(np.mean(ang_mapped) * 100)
             flexion_score: float = (flex_kcr_score + flex_ang_score) / 2.0
         else:
             flexion_score: float = 0.0
@@ -655,7 +605,7 @@ class ExerciseEvaluator:
         # add exercise specific prefix-key 'open_close'
         results = {
             # time series
-            'open_close_time_series_y': performance_features.get('signal_detrended', []),
+            'open_close_time_series_y': performance_features.get('signal_original', []),
             'open_close_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'open_close_rep_num': performance_features.get('repetition_num', 0.0),
@@ -699,27 +649,28 @@ class ExerciseEvaluator:
         active_side_idx = 1 if exercise.side_focus == 'L' else 2
 
         # modify landmark names to hold the side information (left: 1, right: 2)
-        lm_base_names = config['pro_sup']['landmark_names']
-        wrist_name: str = f'{lm_base_names[0]}{active_side_idx}'
-        knuckle_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names[1:]]
-        ref_landmark_names: list = [wrist_name] + knuckle_names
+        wrist_name: str = config['pro_sup']['landmark_names'][0] + str(active_side_idx)
+        rot_col: str = f'{wrist_name}_rot'
 
-        # perform skeleton alignment to extract pure roll rotation
-        active_side_str = str(active_side_idx)
+        # load the cleaned DataFrame directly
+        try:
+            df: pd.DataFrame = exercise.load_dataframe('clean')
+        except FileNotFoundError:
+            print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
+            return {}
 
-        # get aligned hands
-        if not getattr(exercise, 'aligned_hand_landmarks', None):
-            self._align_hands(exercise)
+        if rot_col not in df.columns:
+            print(f'Error: Rotation matrix "{rot_col}" not found. Cannot evaluate Pronation/Supination. Skipping.')
+            return {}
 
-        # safety check
-        for lm in ref_landmark_names:
-            if lm not in exercise.aligned_hand_landmarks:
-                raise ValueError(f'Required landmark {lm} not detected in aligned hands.')
+        # euler extraction from parquet rotation matrices (3x3)
+        stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
 
-        analysis_landmarks: dict = {k: v for k, v in exercise.aligned_hand_landmarks.items() if active_side_str in k}
+        # convert the 3x3 matrices to euler angles (roll, pitch, yaw)
+        euler_angles = Rotation.from_matrix(stacked_rots).as_euler('xyz', degrees=True)
 
-        # calculate the rotational angles for the stabalized hand
-        euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(analysis_landmarks, ref_landmark_names)
+        # assuming that the y-axis is the longitudinal axis of the forearm
+        euler_x, euler_y, euler_z = euler_angles[:, 0], euler_angles[:, 1], euler_angles[:, 2]
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['pro_sup'].get('peak_cfg', self.peak_cfg)
@@ -738,12 +689,12 @@ class ExerciseEvaluator:
         sup_peak_vals = euler_y[peaks]
 
         # get config thresholds for valid opening and closing
-        pronation_thresh: float = config['pro_sup'].get('pronation_rom', 75.0)
-        supination_thresh: float = config['pro_sup'].get('supination_rom', 80.0)
+        pro_thresh: float = config['pro_sup'].get('pronation_rom', 75.0)
+        sup_thresh: float = config['pro_sup'].get('supination_rom', 80.0)
 
         # calculate pronation and supination scores
-        pronation_score = (np.sum(np.abs(pro_valley_vals) > pronation_thresh) / len(pro_valley_vals) * 100) if len(pro_valley_vals) > 0 else 0.0
-        supination_score = (np.sum(sup_peak_vals > supination_thresh) / len(sup_peak_vals) * 100) if len(sup_peak_vals) > 0 else 0.0
+        pro_score = (np.sum(np.abs(pro_valley_vals) > pro_thresh) / len(pro_valley_vals) * 100) if len(pro_valley_vals) > 0 else 0.0
+        sup_score = (np.sum(sup_peak_vals > sup_thresh) / len(sup_peak_vals) * 100) if len(sup_peak_vals) > 0 else 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between rotations), stability (out-of-plane compensation)
 
@@ -777,7 +728,7 @@ class ExerciseEvaluator:
         # add exercise specific prefix-key 'pro_sup'
         results = {
             # time series
-            'pro_sup_time_series_y': performance_features.get('signal_detrended', []),
+            'pro_sup_time_series_y': performance_features.get('signal_original', []),
             'pro_sup_time_series_x': performance_features.get('time_axis', []),
             # general kinematic features
             'pro_sup_rep_num': performance_features.get('repetition_num', 0.0),
@@ -795,8 +746,8 @@ class ExerciseEvaluator:
             'pro_sup_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
             'pro_sup_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
             # correctness of pronation & supination(completeness of movement)
-            'pro_sup_pronation_score': pronation_score,
-            'pro_sup_supination_score': supination_score,
+            'pro_sup_pronation_score': pro_score,
+            'pro_sup_supination_score': sup_score,
             # rhythm with CoV (period time between rotations)
             'pro_sup_rot_cov': rotation_cov,
             # rotation stability

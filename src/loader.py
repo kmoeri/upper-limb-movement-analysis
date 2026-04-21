@@ -2,6 +2,7 @@
 
 # libraries
 import os
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -134,22 +135,69 @@ def load_participants(parquet_file_paths: list) -> None:
     print('Calculating anatomical reference hand sizes ...')
     for p in tqdm(all_participants.values(), desc='Calculating Participant Hand Size.'):
 
-        # 1) calculate the global hand sizes (left and right) for the current Participant
-        best_hand_ref_dict = tb.determine_best_hand_reference(p)    # Returns: {p.pid: {'Affected': X, 'Healthy': Y}}
-        participant_refs = best_hand_ref_dict.get(p.pid, {})
+        left_sizes: dict = {}
+        right_sizes: dict = {}
 
-        # 2) map the 'Affected' and 'Healthy' keys back to Left/Right
-        if p.affected_side == 'L':
-            left_size = participant_refs.get('Affected', 0.0)
-            right_size = participant_refs.get('Healthy', 0.0)
-        else:
-            left_size = participant_refs.get('Healthy', 0.0)
-            right_size = participant_refs.get('Affected', 0.0)
-
-        # 3) add the calculated sizes to every exercise of the current Participant
         for ex_key, ex in p.exercises.items():
+            left_size, right_size = tb.calc_anatomical_hand_sizes(ex)
+
+            # store hand sizes in corresponding Exercise member variable
             ex.left_hand_size = left_size
             ex.right_hand_size = right_size
 
+            if left_size > 0:
+                left_sizes[ex_key] = left_size
+            if right_size > 0:
+                right_sizes[ex_key] = right_size
+
+        # plausibility check
+        STD_THRESH: float = 0.02
+
+        if len(left_sizes) > 1:
+            l_std = np.std(list(left_sizes.values()))
+            if l_std > STD_THRESH:
+                print(f'\n[!] Warning: High left hand size variance (STD: {l_std:.4f} for {p.pid}.')
+                for key, size in left_sizes.items():
+                    print(f'\t - {key}: {size:.4f}')
+
+        if len(right_sizes) > 1:
+            r_std = np.std(list(right_sizes.values()))
+            if r_std > STD_THRESH:
+                print(f'\n[!] Warning: High right hand size variance (STD: {r_std:.4f} for {p.pid}.')
+                for key, size in right_sizes.items():
+                    print(f'\t - {key}: {size:.4f}')
+
         # 4) Save the current participant object
         p.save(os.path.join(project_path,'data', '03_processed'))
+
+    # generate participant master file
+    print('Generating Participant overview CSV ...')
+    csv_rows: list = []
+    for p in all_participants.values():
+        session_key: str = f'{p.pid}_{p.visit_id}'
+
+        for ex_key, ex in p.exercises.items():
+            try:
+                filename: str = os.path.basename(ex.raw_landmark_data_path)
+                trial_code = filename.split('_')[4]
+            except IndexError:
+                trial_code = 'Unknown'
+
+            csv_rows.append({'session_key': session_key,
+                             'trial_code': trial_code,
+                             'visit_id': ex.visit_id,
+                             'exercise_id': ex.exercise_id,
+                             'side_condition': ex.side_condition,
+                             'side_focus': ex.side_focus,
+                             'left_hand_size': round(ex.left_hand_size, 4),
+                             'right_hand_size': round(ex.right_hand_size, 4)})
+
+    if csv_rows:
+        df_overview: pd.DataFrame = pd.DataFrame(csv_rows)
+
+        # sort by participant -> trial code
+        df_overview.sort_values(by=['session_key', 'trial_code'], inplace=True)
+
+        out_file: str = os.path.join(project_path, 'data', '05_results', '01_ul_tracking', 'participant_overview.csv')
+        df_overview.to_csv(out_file, index=False)
+        print(f'Successfully saved overview for {len(df_overview)} trials.')

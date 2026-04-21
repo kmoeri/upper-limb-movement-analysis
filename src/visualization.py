@@ -477,8 +477,12 @@ class Visualizer:
         # plot the main signal
         ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7, label=ex_id, zorder=2)
 
-        # zero-crossing baseline
-        ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
+        # dynamic baseline
+        baseline = features.get('signal_baseline', [])
+        if len(baseline) > 0:
+            ax.plot(time_axis, baseline, color='grey', linestyle='--', label='dynamic baseline', zorder=1)
+        else:
+            ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
 
         # plot valid peaks (green up-triangles)
         peak_indices = features.get('valid_peaks_idx', [])
@@ -531,13 +535,14 @@ class Visualizer:
     # ============================================================================= #
     #                            4) KINEMATICS QUALITY CHECK                        #
     # ============================================================================= #
-    def viz_render_dashboard(self, dashboard_data: dict, p_id: str, visit_id: str, ex_id: str,
+    def viz_render_dashboard(self, df:pd.DataFrame, metrics_dict: dict, p_id: str, visit_id: str, ex_id: str,
                              side_focus: str, skip_frames: int = 2) -> None:
         """
         Renders a modular quality control dashboard and saves it as a video file (mp4).
 
         Args:
-            dashboard_data (dict): Dictionary containing pose, hands, and metrics.
+            df (pd.DataFrame): dataframe with movement data.
+            metrics_dict (dict): Dictionary containing pose, hands, and metrics.
             p_id (str): Participant identifier key.
             visit_id (str): Visit ID.
             ex_id (str): Experiment identifier key.
@@ -548,7 +553,48 @@ class Visualizer:
             None
         """
 
-        metrics_dict = dashboard_data.get('metrics', {})
+        # nested dictionaries for 3D plotter
+        dashboard_data = {'left_hand': {}, 'right_hand': {}, 'pose': {}}
+
+        # helper to extract a (3, frames) list of arrays for a specific joint
+        def get_joint_data(joint_name):
+            if f"{joint_name}_x" in df.columns:
+                return [df[f"{joint_name}_x"].tolist(),
+                        df[f"{joint_name}_y"].tolist(),
+                        df[f"{joint_name}_z"].tolist()]
+            return None
+
+        # Safe identifier function
+        def get_side_id(joint_name):
+            for char in joint_name:
+                if char.isdigit():
+                    return char
+            return None
+
+        # left hand dict
+        for link in config['body_parts'].get('hands_link_lst', []):
+            for joint in link:
+                if get_side_id(joint) == '1' and joint not in dashboard_data['left_hand']:
+                    data = get_joint_data(joint)
+                    if data:
+                        dashboard_data['left_hand'][joint] = data
+
+        # right hand dict
+        for link in config['body_parts'].get('hands_link_lst', []):
+            for joint in link:
+                if get_side_id(joint) == '2' and joint not in dashboard_data['right_hand']:
+                    data = get_joint_data(joint)
+                    if data:
+                        dashboard_data['right_hand'][joint] = data
+
+        # pose dict
+        for link in config['body_parts'].get('pose_link_lst', []):
+            for joint in link:
+                if joint not in dashboard_data['pose']:
+                    data = get_joint_data(joint)
+                    if data:
+                        dashboard_data['pose'][joint] = data
+
         num_metrics = len(metrics_dict)
 
         # ensure skip_frames is at least 1 (skip_frames == 1: use every frame, skip_frames == 2: use every 2nd frame)
@@ -596,8 +642,9 @@ class Visualizer:
             ax.set_zlim([np.min(all_z) - pad, np.max(all_z) + pad])
 
             # invert axes to transform between MediaPipe and matplotlib coordinate systems
-            ax.invert_yaxis()       # MediaPipe's y-axis is positive-down
-            ax.invert_xaxis()       # x-axis mirrors the skeleton on the Y-Z plane
+            ax.invert_yaxis()
+            ax.invert_xaxis()
+            ax.invert_zaxis()
 
             ax.set_xticklabels([])
             ax.set_yticklabels([])

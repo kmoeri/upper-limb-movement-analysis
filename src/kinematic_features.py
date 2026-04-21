@@ -199,16 +199,14 @@ class KinematicFeatures:
         if custom_cfg:
             cfg.update(custom_cfg)
 
-        features = {
-            'repetition_freq': 0.0, 'repetition_num': 0.0,
-            'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
-            'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
-            'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
-            'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
-            'extraction_status': 'failed',
-            'valid_peaks_idx': [],
-            'valid_valleys_idx': []
-        }
+        features = {'repetition_freq': 0.0, 'repetition_num': 0.0,
+                    'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
+                    'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
+                    'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
+                    'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
+                    'extraction_status': 'failed',
+                    'valid_peaks_idx': [],
+                    'valid_valleys_idx': []}
 
         raw_signal = np.squeeze(raw_signal)
 
@@ -250,11 +248,17 @@ class KinematicFeatures:
             det_signal: np.ndarray = sosfiltfilt(sos, signal_data)
             return det_signal
 
+        def _robust_lowpass(signal_data: np.ndarray, high_cutoff: float = 15) -> np.ndarray:
+            if len(signal_data) < 15:
+                return signal_data
+            sos = butter(4, high_cutoff, btype='lowpass', fs=self.fps, output='sos')
+            return sosfiltfilt(sos, signal_data)
+
         # detrend the raw signal
-        detrended_signal: np.ndarray = _robust_detrend(raw_signal, low_cutoff=0.3, high_cutoff=15.0)
+        #detrended_signal: np.ndarray = _robust_detrend(raw_signal, low_cutoff=0.3, high_cutoff=15.0)
+        clean_signal: np.ndarray = _robust_lowpass(raw_signal, high_cutoff=15.0)
 
         # 2) scouting for peaks and valleys using zero-crossings
-
         window_size: int = int(self.fps * 1.0)
 
         # ensure odd kernel size
@@ -262,11 +266,13 @@ class KinematicFeatures:
             window_size += 1
 
         # subtract the rolling median (only for scouting)
-        baseline_trend: np.ndarray = medfilt(volume=detrended_signal, kernel_size=window_size)
-        scout_signal: np.ndarray = detrended_signal - baseline_trend
+        baseline_trend: np.ndarray = medfilt(volume=clean_signal, kernel_size=window_size)
+
+        # create zero-centered signal for peak-finding
+        detrended_signal: np.ndarray = clean_signal - baseline_trend
 
         # extract zero-crossings by from dynamically centered scout signal
-        signs: np.ndarray = np.sign(scout_signal)
+        signs: np.ndarray = np.sign(detrended_signal)
         signs[signs == 0] = 1
         zero_crossings: np.ndarray = np.where(np.diff(signs))[0]
 
@@ -426,6 +432,8 @@ class KinematicFeatures:
 
         # extraction successful
         features['extraction_status'] = 'success'
+        features['signal_original'] = clean_signal
+        features['signal_baseline'] = baseline_trend
         features['signal_detrended'] = detrended_signal
         features['time_axis'] = np.arange(len(detrended_signal)) / self.fps
 
