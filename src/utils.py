@@ -772,7 +772,7 @@ class ToolBox:
         }
 
     @staticmethod
-    def calculate_3d_hand_rotation(landmarks_dict: dict, landmark_name_lst) -> tuple:
+    def calculate_3d_hand_rotation(df: pd.DataFrame, side_idx: int) -> tuple:
         """
         Calculates Euler angles by accumulating relative angles between frames. Ensures shortest-path
         rotation to prevent signal rectification.
@@ -785,76 +785,58 @@ class ToolBox:
             euler_angles (tuple): Angle around x-axis, y-axis, and z-axis.
         """
 
-        def _get_wrist_coordinate_system(lm_dict: dict, lm_name_lst: list) -> tuple:
-            """
-                Calculates the coordinate system of the wrist by spanning a triangular surface:
-                wrist -> index finger mcp -> little finger mcp <- wrist.
-                The x-axis is aligned from the wrist distal to the center between index mcp and little finger mcp.
-                The z-axis vector is represented by the normal of the back of the hand.
-                The y-axis results from the cross product of the other two vectors and is directed medially.
+        # get the three hand landmarks necessary to calculate a stable rotation (wrist, index knuckle, pinky knuckle)
+        wrist_name: str = f'wrist{side_idx}'
+        index_name: str = f'mcp{side_idx}2'
+        pinky_name: str = f'mcp{side_idx}5'
 
-                Args:
-                    lm_dict (dict): Dictionary of landmarks (3D coordinates).
-                    lm_name_lst (list): List of landmark names (e.g., "wrist1", "mcp12", "mcp15").
+        # check that required landmarks exist
+        for lm in [wrist_name, index_name, pinky_name]:
+            if f'{lm}_x' not in df.columns:
+                print(f'Error: Landmark "{lm}" not found. Cannot evaluate Pronation/Supination. Skipping.')
+                return {}
 
-                Returns:
-                    x_vec_norm (np.ndarray): x-axis vector of wrist.
-                    y_vec_norm (np.ndarray): y-axis vector of wrist.
-                    z_vec_norm (np.ndarray): z-axis vector of wrist.
-                    wrist_coord (np.ndarray): mediapipe coordinate of wrist.
-                    norm_x (np.ndarray): L2 distance from wrist to midpoint of mcp.
-                """
+        # landmark coordinates
+        wrist_lm: np.ndarray = df[[f'{wrist_name}_x', f'{wrist_name}_y', f'{wrist_name}_z']].to_numpy()
+        index_lm: np.ndarray = df[[f'{index_name}_x', f'{index_name}_y', f'{index_name}_z']].to_numpy()
+        pinky_lm: np.ndarray = df[[f'{pinky_name}_x', f'{pinky_name}_y', f'{pinky_name}_z']].to_numpy()
 
-            # landmark coordinates
-            wrist_lm: np.ndarray = np.array(lm_dict[lm_name_lst[0]])[:3, :].T
-            index_lm: np.ndarray = np.array(lm_dict[lm_name_lst[1]])[:3, :].T
-            pinky_lm: np.ndarray = np.array(lm_dict[lm_name_lst[2]])[:3, :].T
+        # get the center between index and pinky knuckle to align the x vector with the axis of the hand
+        midpoint: np.ndarray = 0.5 * (index_lm + pinky_lm)
 
-            # get the center between index and pinky knuckle to align the x vector with the axis of the hand
-            midpoint: np.ndarray = 0.5 * (index_lm + pinky_lm)
+        # local hand vectors with origin at wrist
+        y_vec: np.ndarray = midpoint - wrist_lm
+        z_vec: np.ndarray = np.cross((index_lm - wrist_lm), (pinky_lm - wrist_lm), axis=1)
 
-            # local hand vectors with origin at wrist
-            y_vec: np.ndarray = midpoint - wrist_lm
-            z_vec: np.ndarray = np.cross((index_lm - wrist_lm), (pinky_lm - wrist_lm), axis=1)
+        # align coordinate system depending on the current hand side
+        if str(side_idx) == '1':   # invert Z for left hand
+            z_vec = z_vec * (-1)
 
-            # align coordinate system depending on the current hand side
-            if lm_name_lst[0][-1] == '1':   # left hand
-                z_vec = z_vec * (-1)
+        # calculate the x_vector using the cross product of the other two vectors
+        x_vec: np.ndarray = np.cross(y_vec, z_vec, axis=1)
 
-            # calculate the x_vector using the cross product of the other two vectors
-            x_vec: np.ndarray = np.cross(y_vec, z_vec, axis=1)
+        # L2 norm / vector magnitude
+        norm_x: np.ndarray = np.linalg.norm(x_vec, axis=1, keepdims=True)
+        norm_y: np.ndarray = np.linalg.norm(y_vec, axis=1, keepdims=True)
+        norm_z: np.ndarray = np.linalg.norm(z_vec, axis=1, keepdims=True)
 
-            # L2 norm / vector magnitude
-            norm_x: np.ndarray = np.linalg.norm(x_vec, axis=1)
-            norm_y: np.ndarray = np.linalg.norm(y_vec, axis=1)
-            norm_z: np.ndarray = np.linalg.norm(z_vec, axis=1)
-
-            # normalize by broadcasting (catch divisions by zero --> returns a vector of zeros)
-            x_vec_norm: np.ndarray = np.divide(x_vec, norm_x[:, np.newaxis], out=np.zeros_like(x_vec),
-                                               where=norm_x[:, np.newaxis] != 0)
-            y_vec_norm: np.ndarray = np.divide(y_vec, norm_y[:, np.newaxis], out=np.zeros_like(y_vec),
-                                               where=norm_y[:, np.newaxis] != 0)
-            z_vec_norm: np.ndarray = np.divide(z_vec, norm_z[:, np.newaxis], out=np.zeros_like(z_vec),
-                                               where=norm_z[:, np.newaxis] != 0)
-
-            # also returns norm_x to identify tracking loss
-            return x_vec_norm, y_vec_norm, z_vec_norm, norm_x
-
-        # get basis vectors (y-distal, x-medial, z-palm)
-        x_n, y_n, z_n, norm_x = _get_wrist_coordinate_system(landmarks_dict, landmark_name_lst)
+        # normalize by broadcasting (catch divisions by zero --> returns a vector of zeros)
+        x_vec_norm: np.ndarray = x_vec / (np.linalg.norm(x_vec, axis=1, keepdims=True) + 1e-8)
+        y_vec_norm: np.ndarray = y_vec / (np.linalg.norm(y_vec, axis=1, keepdims=True) + 1e-8)
+        z_vec_norm: np.ndarray = z_vec / (np.linalg.norm(z_vec, axis=1, keepdims=True) + 1e-8)
 
         # stack vectors to matrix
-        mats: np.ndarray = np.stack((x_n, y_n, z_n), axis=-1)
+        mats: np.ndarray = np.stack((x_vec_norm, y_vec_norm, z_vec_norm), axis=-1)
 
         # replace zero-matrices with the identity matrix
-        invalid_mask = (norm_x == 0)
+        invalid_mask = (np.linalg.norm(x_vec, axis=1) < 1e-5)
         mats[invalid_mask] = np.eye(3)
 
         # convert to rotation object
         rot_objs = Rotation.from_matrix(mats)
 
         # calculate the absolute rotation relative to the first valid frame
-        valid_idc: int = np.where(~invalid_mask)[0]
+        valid_idc: np.ndarray = np.where(~invalid_mask)[0]
         if len(valid_idc) == 0:
             return np.zeros(len(mats)), np.zeros(len(mats)), np.zeros(len(mats))
 

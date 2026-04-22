@@ -479,11 +479,11 @@ class Visualizer:
         ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7, label=ex_id, zorder=2)
 
         # dynamic baseline
-        baseline = features.get('signal_baseline', [])
-        if len(baseline) > 0:
-            ax.plot(time_axis, baseline, color='grey', linestyle='--', label='dynamic baseline', zorder=1)
-        else:
-            ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
+        # baseline = features.get('signal_baseline', [])
+        # if len(baseline) > 0:
+        #     ax.plot(time_axis, baseline, color='grey', linestyle='--', label='dynamic baseline', zorder=1)
+        # else:
+        #     ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
 
         # plot valid peaks (green up-triangles)
         peak_indices = features.get('valid_peaks_idx', [])
@@ -595,13 +595,13 @@ class Visualizer:
                         dashboard_data['pose'][joint] = data
 
         # extract rotation matrices for the active wrist
-        rot_matrices = {}
-        if 'ProSup' in ex_id:
-            active_side_idx = '1' if side_focus == 'L' else '2'
-            rot_col = f'wrist{active_side_idx}_rot'
-            if rot_col in df.columns:
-                stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
-                rot_matrices['active'] = stacked_rots
+        # rot_matrices = {}
+        # if 'ProSup' in ex_id:
+        #     active_side_idx = '1' if side_focus == 'L' else '2'
+        #     rot_col = f'wrist{active_side_idx}_rot'
+        #     if rot_col in df.columns:
+        #         stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
+        #         rot_matrices['active'] = stacked_rots
 
         num_metrics = len(metrics_dict)
 
@@ -684,9 +684,10 @@ class Visualizer:
 
                 elif 'ProSup' in current_ex:
                     # xyz coordinate axes on the wrist
-                    diag['axis_x'], = ax.plot([], [], [], '-', c='r', lw=3, zorder=10, label='X')
-                    diag['axis_y'], = ax.plot([], [], [], '-', c='g', lw=3, zorder=10, label='Y')
-                    diag['axis_z'], = ax.plot([], [], [], '-', c='b', lw=3, zorder=10, label='Z')
+                    diag['quivers'] = []
+                    ax.plot([], [], [], '-', c='r', lw=2, label='X (Medial)')
+                    ax.plot([], [], [], '-', c='g', lw=3, zorder=10, label='Y (Distal)')
+                    ax.plot([], [], [], '-', c='b', lw=3, zorder=10, label='Z (Palm)')
                     ax.legend(loc='upper left', fontsize=8)
 
             return pts, diag
@@ -770,7 +771,7 @@ class Visualizer:
             updated_artists = []
 
             # helper to update the 3D skeletons
-            def update_skeleton(lm_dict, pts, lines, links, diag=None, side_focused=None, current_ex=''):
+            def update_skeleton(ax, lm_dict, pts, lines, links, diag=None, side_focused=None, current_ex=''):
 
                 # return for missing data
                 if not lm_dict or not pts:
@@ -844,26 +845,57 @@ class Visualizer:
                                 updated_artists.extend([diag['dots_f'][index], diag['bands'][index]])
 
                     elif 'ProSup' in current_ex:
-                        if w_k in lm_dict and 'active' in rot_matrices:
-                            R = rot_matrices['active'][frame]
-                            w_pos = np.array([lm_dict[w_k][0][frame], lm_dict[w_k][1][frame], lm_dict[w_k][2][frame]])
+                        index_name = f'mcp{side_idx}2'
+                        pinky_name = f'mcp{side_idx}5'
 
-                            # Draw 8cm axes (X=Red, Y=Green, Z=Blue)
+                        if w_k in lm_dict and index_name in lm_dict and pinky_name in lm_dict:
+                            wrist_pos = np.array([lm_dict[w_k][0][frame],
+                                                  lm_dict[w_k][1][frame],
+                                                  lm_dict[w_k][2][frame]])
+                            index_pos = np.array([lm_dict[index_name][0][frame],
+                                                  lm_dict[index_name][1][frame],
+                                                  lm_dict[index_name][2][frame]])
+                            pinky_pos = np.array([lm_dict[pinky_name][0][frame],
+                                                  lm_dict[pinky_name][1][frame],
+                                                  lm_dict[pinky_name][2][frame]])
+
+                            # calculate the coordinate triangle from the 3D landmarks
+                            y_vec = 0.5 * (index_pos + pinky_pos) - wrist_pos
+                            z_vec = np.cross((index_pos - wrist_pos), (pinky_pos - wrist_pos))
+                            if side_idx == '1':
+                                z_vec = z_vec * (-1)
+                            x_vec = np.cross(y_vec, z_vec)
+
+                            # normalize the vectors
+                            x_n = x_vec / (np.linalg.norm(x_vec) + 1e-8)
+                            y_n = y_vec / (np.linalg.norm(y_vec) + 1e-8)
+                            z_n = z_vec / (np.linalg.norm(z_vec) + 1e-8)
+
+                            # remove old arrows
+                            for q in diag['quivers']:
+                                q.remove()
+                            diag['quivers'].clear()
+
+                            # draw new 3D arrows originating at the wrist
                             ax_length = 0.08
-                            for ax_idx, ax_key in enumerate(['axis_x', 'axis_y', 'axis_z']):
-                                end_pos = w_pos + R[:, ax_idx] * ax_length
-                                diag[ax_key].set_data([w_pos[0], end_pos[0]], [w_pos[1], end_pos[1]])
-                                diag[ax_key].set_3d_properties([w_pos[2], end_pos[2]])
-                                updated_artists.append(diag[ax_key])
+                            q_x = ax.quiver(wrist_pos[0], wrist_pos[1], wrist_pos[2], x_n[0], x_n[1], x_n[2], color='r',
+                                            length=ax_length, normalize=True)
+                            q_y = ax.quiver(wrist_pos[0], wrist_pos[1], wrist_pos[2], y_n[0], y_n[1], y_n[2], color='g',
+                                            length=ax_length, normalize=True)
+                            q_z = ax.quiver(wrist_pos[0], wrist_pos[1], wrist_pos[2], z_n[0], z_n[1], z_n[2], color='b',
+                                            length=ax_length, normalize=True)
+
+                            diag['quivers'].extend([q_x, q_y, q_z])
+                            updated_artists.extend([q_x, q_y, q_z])
 
             # update the skeleton positions for the animation
 
-            update_skeleton(dashboard_data['left_hand'], pts_left, lines_left, hand_links, diag_l,
+            update_skeleton(ax_left, dashboard_data['left_hand'], pts_left, lines_left, hand_links, diag_l,
                             'L' if side_focus == 'L' else None, current_ex=ex_id)
 
-            update_skeleton(dashboard_data['pose'], pts_pose, lines_pose, pose_links, current_ex=ex_id)
+            update_skeleton(ax_pose, dashboard_data['pose'], pts_pose, lines_pose, pose_links, current_ex=ex_id)
 
-            update_skeleton(dashboard_data['right_hand'], pts_right, lines_right, hand_links, diag_r,
+            update_skeleton(ax_right, dashboard_data['right_hand'], pts_right, lines_right, hand_links, diag_r,
                             'R' if side_focus == 'R' else None, current_ex=ex_id)
 
             # update the 1D red tracker lines

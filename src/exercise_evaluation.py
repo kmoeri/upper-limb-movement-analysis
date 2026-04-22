@@ -34,8 +34,7 @@ class ExerciseEvaluator:
                                'prominence_factor': 0.35,
                                'distance_factor': 0.35}
 
-    def _extract_distance_based_kinematics(self, df: pd.DataFrame, dynamic_norm_arr: np.ndarray,
-                                           static_hand_size: float, ref_landmark_name: str,
+    def _extract_distance_based_kinematics(self, df: pd.DataFrame, static_hand_size: float, ref_landmark_name: str,
                                            target_landmark_names: list, custom_peak_cfg: dict = None) -> dict:
         """
         Helper function to calculate normalized Euclidean distance and extract kinematic
@@ -43,8 +42,7 @@ class ExerciseEvaluator:
         Uses dynamic palm lengths for smooth peak detection and static anatomical hand sizes for feature scaling.
 
         Args:
-            landmark_data (dict): 3D coordinate arrays.
-            dynamic_norm_arr (nd.nparray): Array of dynamic normalized distances.
+            df (pd.DataFrame): Pandas DataFrame with 3D landmark coordinates.
             static_hand_size (float): Static hand size.
             ref_landmark_name (str): The reference point (e.g., 'wrist1', 'cmc1', 'ftip1').
             target_landmark_names (list): The moving points (e.g., ['ftip2', 'ftip3']).
@@ -78,15 +76,11 @@ class ExerciseEvaluator:
             # calculate the absolute raw distance
             raw_dist = np.linalg.norm(ref_pos - target_pos, axis=1)
 
-            # specifically to find peaks
-            safe_dynamic_norm = np.where(dynamic_norm_arr == 0, 1e-8, dynamic_norm_arr)
-            smoothing_signal = raw_dist / safe_dynamic_norm
-
             # distance used for final distance measurement
             norm_dist_arr = raw_dist / max(static_hand_size, 1e-8)
 
             # peak extraction
-            feature_dict = self.kf.calc_kinematic_parameters(smoothing_signal, current_cfg)
+            feature_dict = self.kf.calc_kinematic_parameters(norm_dist_arr, current_cfg)
 
             # overwrite amplitude features using the static normalized array
             valid_peaks = feature_dict.get('valid_peaks_idx', [])
@@ -114,14 +108,14 @@ class ExerciseEvaluator:
         # modify landmark names to hold the side information (left: 1, right: 2)
         lm_base_names: list = config['index_ftap']['landmark_names']
         lm_corr_names: list = [f'{x[:-1]}{active_side_idx}{x[-1]}' for x in lm_base_names]
-        anchor = f'wrist{active_side_idx}'  # wrist
-        target = lm_corr_names[1]           # index fingertip
+        anchor = f'cmc{active_side_idx}1'       # thenar
+        target = lm_corr_names[1]               # index fingertip
         pair_key: str = f'{anchor}-{target}'
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['index_ftap'].get('peak_cfg', self.peak_cfg)
 
-        # load the cleaned DataFrame directly
+        # load the cleaned DataFrame
         try:
             df: pd.DataFrame = exercise.load_dataframe('clean')
         except FileNotFoundError:
@@ -133,7 +127,6 @@ class ExerciseEvaluator:
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(df,
-                                                                         dynamic_palm_arr,  # for peak detection
                                                                          p_hand_size,       # for feature scaling
                                                                          anchor,
                                                                          [target],
@@ -180,7 +173,6 @@ class ExerciseEvaluator:
 
         # calculate Euclidean distance for passive fingers
         passive_kinematics: dict = self._extract_distance_based_kinematics(df,
-                                                                           dynamic_palm_arr,
                                                                            p_hand_size,
                                                                            wrist_key,
                                                                            passive_fingers)
@@ -276,7 +268,6 @@ class ExerciseEvaluator:
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(df,
-                                                                         dynamic_palm_arr,
                                                                          p_hand_size,
                                                                          thumb,
                                                                          finger_names,
@@ -350,7 +341,7 @@ class ExerciseEvaluator:
         if len(tapping_sequence_idc_lst) > 1:
             tapping_diff: np.ndarray = np.diff(tapping_sequence_idc_lst)
             tapping_mean: float = float(np.mean(tapping_diff))
-            tapping_cov: float = float((float(np.std(tapping_diff))/ tapping_mean) * 100) if tapping_mean > 0 else 0.0
+            tapping_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
         else:
             tapping_mean: float = 0.0
             tapping_cov: float = 0.0
@@ -648,10 +639,6 @@ class ExerciseEvaluator:
         # get current active side
         active_side_idx = 1 if exercise.side_focus == 'L' else 2
 
-        # modify landmark names to hold the side information (left: 1, right: 2)
-        wrist_name: str = config['pro_sup']['landmark_names'][0] + str(active_side_idx)
-        rot_col: str = f'{wrist_name}_rot'
-
         # load the cleaned DataFrame directly
         try:
             df: pd.DataFrame = exercise.load_dataframe('clean')
@@ -659,18 +646,8 @@ class ExerciseEvaluator:
             print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
             return {}
 
-        if rot_col not in df.columns:
-            print(f'Error: Rotation matrix "{rot_col}" not found. Cannot evaluate Pronation/Supination. Skipping.')
-            return {}
-
-        # euler extraction from parquet rotation matrices (3x3)
-        stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
-
-        # convert the 3x3 matrices to euler angles (roll, pitch, yaw)
-        euler_angles = Rotation.from_matrix(stacked_rots).as_euler('xyz', degrees=True)
-
         # assuming that the y-axis is the longitudinal axis of the forearm
-        euler_x, euler_y, euler_z = euler_angles[:, 0], euler_angles[:, 1], euler_angles[:, 2]
+        euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(df, active_side_idx)
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['pro_sup'].get('peak_cfg', self.peak_cfg)
