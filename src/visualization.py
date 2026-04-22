@@ -506,7 +506,7 @@ class Visualizer:
                         f"Mean Period: {features.get('period_mean', 0):.2f}s")
 
         # position text in the top-left corner (axes coordinates: 0 to 1)
-        ax.text(0.01, 0.96, metrics_text, transform=ax.transAxes,
+        ax.text(1.0, 0.96, metrics_text, transform=ax.transAxes,
                 verticalalignment='top', horizontalalignment='left',
                 bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9),
                 fontsize=10, zorder=4)
@@ -514,7 +514,10 @@ class Visualizer:
         # layout
         ax.set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=14, pad=15)
         ax.set_xlabel('Time [s]', fontsize=12)
-        ax.set_ylabel('Amplitude (Detrended)', fontsize=12)
+        if 'ProSup' in ex_id:
+            ax.set_ylabel('Rotation Angle [°]', fontsize=12)
+        else:
+            ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
         ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -553,6 +556,13 @@ class Visualizer:
         Returns:
             None
         """
+
+        # check whether video already exists
+        f_name = f'{p_id}-{visit_id}_{ex_id}_QC.mp4'
+        out_path = os.path.join(self.kinematics_quality_res_path, f_name)
+
+        if os.path.exists(out_path):
+            return
 
         # nested dictionaries for 3D plotter
         dashboard_data = {'left_hand': {}, 'right_hand': {}, 'pose': {}}
@@ -906,10 +916,6 @@ class Visualizer:
                 updated_artists.append(v_line)
 
             return updated_artists
-
-        # file naming
-        f_name = f'{p_id}-{visit_id}_{ex_id}_QC.mp4'
-        out_path = os.path.join(self.kinematics_quality_res_path, f_name)
 
         # render to videos (mp4)
         #print(f"Rendering the quality check dashboard to {out_path}...")

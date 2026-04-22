@@ -3,6 +3,7 @@
 # libraries
 import numpy as np
 import pandas as pd
+from matplotlib.mlab import detrend
 from scipy.stats import entropy
 from scipy.signal import find_peaks, medfilt, butter, sosfiltfilt
 
@@ -166,9 +167,8 @@ class KinematicFeatures:
 
     def calc_kinematic_parameters(self, raw_signal: np.ndarray, custom_cfg: dict = None) -> dict:
         """
-        Extracts kinematic parameters from a 1D time-series signal using a robust, adaptive
-        2-pass peak detection strategy. Identifies valid alternating peaks and valleys
-        to calculate amplitude, period, velocity, and consistency (CoV) metrics.
+        Extracts kinematic parameters from a 1D time-series signal using scipy find_peaks.
+        Identifies valid alternating peaks and valleys and calculates amplitude, period, velocity, and (CoV) metrics.
 
         Args:
             raw_signal (np.ndarray): 1D array of kinematic data (e.g., Euclidean distance).
@@ -184,18 +184,12 @@ class KinematicFeatures:
         tb = ToolBox(fps=self.fps)
 
         # default config used for peak detection
-        cfg: dict = {'min_segment_length': 0.00,
-                     'min_peak_amp_diff': 0.00,
-                     'min_peak_dur_diff': 0.00,
-                     'min_valley_amp_diff': 0.00,
-                     'min_valley_dur_diff': 0.00,
-                     'max_peak_amp_diff': 0.00,
-                     'max_peak_dur_diff': 0.0,
-                     'max_valley_amp_diff': 0.0,
-                     'prominence_factor': 0.35,
-                     'distance_factor': 0.35}
+        cfg: dict = {'lowpass_cutoff': 15.0,        # Hz
+                     'min_prominence': 0.1,         # minimum peak-to-valley delta
+                     'min_distance_sec': 0.1,       # minimum time between the same events (peak-peak or valley-valley)
+                     'max_distance_sec': 5.0}       # max time between events to count as a repetition
 
-        # update the peak detection config if a custom config exists
+        # update if a custom config exists
         if custom_cfg:
             cfg.update(custom_cfg)
 
@@ -216,136 +210,25 @@ class KinematicFeatures:
             features['extraction_status'] = 'failed'
             return features
 
-        # 1) detrend
-        def _robust_detrend(signal_data: np.ndarray, low_cutoff: float = 0.3, high_cutoff: float = 15) -> np.ndarray:
-            """
-            Removes non-linear baseline drifts (wandering baselines) and high frequency jitter
-            using a zero-phase Bandpass filter.
-
-            Args:
-                signal_data (np.ndarray): The raw signal.
-                low_cutoff (float): Frequency below which to remove data. defaults to 0.3 Hz.
-                high_cutoff (float): Frequency above which to remove data. Defaults to 15 Hz.
-
-            Returns:
-                det_signal (np.ndarray): The detrended signal.
-            """
-
-            # requires at least 1 full period  of the lowest frequency
-            min_samples: int = int(1.0 * (self.fps / low_cutoff))
-
-            # fall back to 2nd order polynomial for a short signal
-            if len(signal_data) < min_samples:
-                x: np.ndarray = np.arange(len(signal_data))
-                p: np.ndarray = np.polyfit(x, signal_data, 2)
-                trend = np.polyval(p, x)
-                return signal_data - trend
-
-            # 4th order Butterworth Bandpass filter
-            sos = butter(4, [low_cutoff, high_cutoff], btype='bandpass', fs=self.fps, output='sos')
-
-            # apply filter forward and backward (zero phase distortion): centers the signal around 0
-            det_signal: np.ndarray = sosfiltfilt(sos, signal_data)
-            return det_signal
-
-        def _robust_lowpass(signal_data: np.ndarray, high_cutoff: float = 15) -> np.ndarray:
+        # robust filtering
+        def _robust_lowpass(signal_data: np.ndarray, high_cutoff: float) -> np.ndarray:
             if len(signal_data) < 15:
                 return signal_data
             sos = butter(4, high_cutoff, btype='lowpass', fs=self.fps, output='sos')
             return sosfiltfilt(sos, signal_data)
 
         # detrend the raw signal
-        #detrended_signal: np.ndarray = _robust_detrend(raw_signal, low_cutoff=0.3, high_cutoff=15.0)
-        clean_signal: np.ndarray = _robust_lowpass(raw_signal, high_cutoff=15.0)
+        clean_signal: np.ndarray = _robust_lowpass(raw_signal, high_cutoff=cfg['lowpass_cutoff'])
 
-        # 2) scouting for peaks and valleys using zero-crossings
-        window_size: int = int(self.fps * 1.0)
+        # peak & valley detection
+        dist_frames: int = max(1, int(cfg['min_distance_sec'] * self.fps))
+        prominence: float = cfg['min_prominence']
 
-        # ensure odd kernel size
-        if window_size % 2 == 0:
-            window_size += 1
+        peak_idc, _ = find_peaks(clean_signal, prominence=prominence, distance=dist_frames)
+        valley_idc, _ = find_peaks(-clean_signal, prominence=prominence, distance=dist_frames)
 
-        # subtract the rolling median (only for scouting)
-        baseline_trend: np.ndarray = medfilt(volume=clean_signal, kernel_size=window_size)
-
-        # create zero-centered signal for peak-finding
-        detrended_signal: np.ndarray = clean_signal - baseline_trend
-
-        # extract zero-crossings by from dynamically centered scout signal
-        signs: np.ndarray = np.sign(detrended_signal)
-        signs[signs == 0] = 1
-        zero_crossings: np.ndarray = np.where(np.diff(signs))[0]
-
-        scout_peaks: list = []
-        scout_valleys: list = []
-
-        # only run if there are 2 or more zero_crossings (one period or more)
-        if len(zero_crossings) >= 2:
-            # move a window across the zero-crossings to capture all positive and negative area of the signal
-            for i in range(len(zero_crossings) - 1):
-                window_start, window_end = zero_crossings[i], zero_crossings[i + 1]
-                if (window_end - window_start) < (self.fps * cfg['min_segment_length']):
-                    continue
-                # extract the signal segment between the two current zero crossings
-                segment = detrended_signal[window_start:window_end]
-
-                # extract the peak/valley amplitudes and its index for the current segment
-                if np.mean(segment) > 0:
-                    scout_peaks.append({'idx': window_start + int(np.argmax(segment)), 'amp': np.max(segment)})
-                else:
-                    scout_valleys.append({'idx': window_start + int(np.argmin(segment)), 'amp': abs(np.min(segment))})
-
-        # abort if less than 2 peaks or no valleys were found
-        if len(scout_peaks) < 2 or len(scout_valleys) < 1:
-            features['extraction_status'] = 'failed_scout_pass'
-            return features
-
-        # calculate statistics from scouting (1-pass) the signal
-        median_peak_amp: float = float(np.median([p['amp'] for p in scout_peaks]))
-        median_valley_amp: float = float(np.median([v['amp'] for v in scout_valleys]))
-
-        scout_peak_indices: list = sorted([p['idx'] for p in scout_peaks])
-        median_period_samples: float = float(np.median(np.diff(scout_peak_indices)))
-
-        # 3) refining the scouted peaks and valleys
-
-        # dynamic tuning
-        prominence_threshold_peak: float = cfg['prominence_factor'] * median_peak_amp
-        prominence_threshold_valley = cfg['prominence_factor'] * median_valley_amp
-        distance_threshold = int(cfg['distance_factor'] * median_period_samples)
-        distance_threshold = max(distance_threshold, 1)
-
-        # find peaks using prominence
-        peak_idc, _ = find_peaks(detrended_signal,
-                                 prominence=prominence_threshold_peak,
-                                 distance=distance_threshold)
-
-        # find valleys
-        valley_idc, _ = find_peaks((-1)*detrended_signal,
-                                   prominence=prominence_threshold_valley,
-                                   distance=distance_threshold)
-
-        potential_peaks = [{'idx': i, 'amp': detrended_signal[i], 'type': 'peak'} for i in peak_idc]
-        potential_valleys = [{'idx': i, 'amp': abs(detrended_signal[i]), 'type': 'valley'} for i in valley_idc]
-
-        # filter the peaks
-        filtered_peaks = []
-        for p in potential_peaks:
-            # ceiling check
-            if cfg['max_peak_amp_diff'] and p['amp'] > 0:
-                if p['amp'] > (cfg['max_peak_amp_diff'] * median_peak_amp):
-                    continue
-
-            filtered_peaks.append(p)
-
-        # filter the valleys
-        filtered_valleys = []
-        for v in potential_valleys:
-            # ceiling check
-            if cfg['max_valley_amp_diff'] and v['amp'] > (cfg['max_valley_amp_diff'] * median_valley_amp):
-                continue
-
-            filtered_valleys.append(v)
+        potential_peaks: list = [{'idx': i, 'amp': clean_signal[i], 'type': 'peak'} for i in peak_idc]
+        potential_valleys: list = [{'idx': i, 'amp': abs(clean_signal[i]), 'type': 'valley'} for i in valley_idc]
 
         # enforce alternation (peak-valley-peak-valley)
         def _alternation_filter(peaks, valleys):
@@ -358,7 +241,7 @@ class KinematicFeatures:
                 last = clean_events[-1]
 
                 if current['type'] == last['type']:
-
+                    # if two same types of events occur, keep the one with larger amplitude
                     if current['amp'] > last['amp']:
                         clean_events.pop()
                         clean_events.append(current)
@@ -368,19 +251,21 @@ class KinematicFeatures:
             return [e for e in clean_events if e['type'] == 'peak'], [e for e in clean_events if e['type'] == 'valley']
 
         # get clean alternating peak and valley events
-        valid_peaks, valid_valleys = _alternation_filter(filtered_peaks, filtered_valleys)
+        valid_peaks, valid_valleys = _alternation_filter(potential_peaks, potential_valleys)
 
         features['valid_peaks_idx'] = [p['idx'] for p in valid_peaks]
         features['valid_valleys_idx'] = [v['idx'] for v in valid_valleys]
 
         if len(valid_peaks) < 2:
             features['extraction_status'] = 'failed_insufficient_reps'
+            features['signal_original'] = clean_signal
+            features['time_axis'] = np.arange(len(clean_signal)) / self.fps
             return features
 
         # 4) metrics calculation
 
         # period
-        peak_indices = [p['idx'] for p in valid_peaks]
+        peak_indices = features['valid_peaks_idx']
         period_diffs = np.diff(peak_indices) / self.fps
         features.update(tb.get_descriptive_stats(np.array(period_diffs), 'period'))
 
@@ -400,15 +285,15 @@ class KinematicFeatures:
                 v = next_valleys[0]
                 if (v['idx'] - p_idx) / self.fps < (1.5 * avg_period):
                     # Calculate true ptp amplitude
-                    raw_p = detrended_signal[p['idx']]
-                    raw_v = detrended_signal[v['idx']]
+                    raw_p = clean_signal[p['idx']]
+                    raw_v = clean_signal[v['idx']]
                     amplitudes.append(raw_p - raw_v)
 
         if amplitudes:
             features.update(tb.get_descriptive_stats(np.array(amplitudes), 'amplitude'))
 
         # velocities
-        velocity_curve = np.gradient(detrended_signal, 1 / self.fps)
+        velocity_curve = np.gradient(clean_signal, 1 / self.fps)
         rise_vels, fall_vels = [], []
         all_events = sorted(valid_peaks + valid_valleys, key=lambda x: x['idx'])
 
@@ -433,9 +318,7 @@ class KinematicFeatures:
         # extraction successful
         features['extraction_status'] = 'success'
         features['signal_original'] = clean_signal
-        features['signal_baseline'] = baseline_trend
-        features['signal_detrended'] = detrended_signal
-        features['time_axis'] = np.arange(len(detrended_signal)) / self.fps
+        features['time_axis'] = np.arange(len(clean_signal)) / self.fps
 
         return features
 
@@ -468,3 +351,279 @@ class KinematicFeatures:
         flexion_angle: np.ndarray = np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
 
         return flexion_angle
+
+    # Highly adaptive feature extraction function designed to help with fluctuating MediaPipe data
+    # def calc_kinematic_parameters(self, raw_signal: np.ndarray, custom_cfg: dict = None) -> dict:
+    #     """
+    #     Extracts kinematic parameters from a 1D time-series signal using a robust, adaptive
+    #     2-pass peak detection strategy. Identifies valid alternating peaks and valleys
+    #     to calculate amplitude, period, velocity, and consistency (CoV) metrics.
+    #
+    #     Args:
+    #         raw_signal (np.ndarray): 1D array of kinematic data (e.g., Euclidean distance).
+    #         custom_cfg (dict, optional): Custom configuration dictionary to override default
+    #                                      peak detection parameters. Defaults to None.
+    #
+    #     Returns:
+    #         dict: Dictionary containing descriptive statistics for period, amplitude,
+    #               velocity, CoV, the indices of valid peaks/valleys, and an extraction
+    #               status flag ('success' or failure reason).
+    #     """
+    #     # initialize ToolBox object
+    #     tb = ToolBox(fps=self.fps)
+    #
+    #     # default config used for peak detection
+    #     cfg: dict = {'min_segment_length': 0.00,
+    #                  'min_peak_amp_diff': 0.00,
+    #                  'min_peak_dur_diff': 0.00,
+    #                  'min_valley_amp_diff': 0.00,
+    #                  'min_valley_dur_diff': 0.00,
+    #                  'max_peak_amp_diff': 0.00,
+    #                  'max_peak_dur_diff': 0.0,
+    #                  'max_valley_amp_diff': 0.0,
+    #                  'prominence_factor': 0.35,
+    #                  'distance_factor': 0.35}
+    #
+    #     # update the peak detection config if a custom config exists
+    #     if custom_cfg:
+    #         cfg.update(custom_cfg)
+    #
+    #     features = {'repetition_freq': 0.0, 'repetition_num': 0.0,
+    #                 'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
+    #                 'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
+    #                 'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
+    #                 'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
+    #                 'extraction_status': 'failed',
+    #                 'valid_peaks_idx': [],
+    #                 'valid_valleys_idx': []}
+    #
+    #     raw_signal = np.squeeze(raw_signal)
+    #
+    #     n_samples = len(raw_signal)
+    #     if n_samples < max(self.fps, 10):
+    #         print(f'Error: Trial skipped. Samples ({n_samples}) < Framerate ({self.fps}).')
+    #         features['extraction_status'] = 'failed'
+    #         return features
+    #
+    #     # 1) detrend
+    #     def _robust_detrend(signal_data: np.ndarray, low_cutoff: float = 0.3, high_cutoff: float = 15) -> np.ndarray:
+    #         """
+    #         Removes non-linear baseline drifts (wandering baselines) and high frequency jitter
+    #         using a zero-phase Bandpass filter.
+    #
+    #         Args:
+    #             signal_data (np.ndarray): The raw signal.
+    #             low_cutoff (float): Frequency below which to remove data. defaults to 0.3 Hz.
+    #             high_cutoff (float): Frequency above which to remove data. Defaults to 15 Hz.
+    #
+    #         Returns:
+    #             det_signal (np.ndarray): The detrended signal.
+    #         """
+    #
+    #         # requires at least 1 full period  of the lowest frequency
+    #         min_samples: int = int(1.0 * (self.fps / low_cutoff))
+    #
+    #         # fall back to 2nd order polynomial for a short signal
+    #         if len(signal_data) < min_samples:
+    #             x: np.ndarray = np.arange(len(signal_data))
+    #             p: np.ndarray = np.polyfit(x, signal_data, 2)
+    #             trend = np.polyval(p, x)
+    #             return signal_data - trend
+    #
+    #         # 4th order Butterworth Bandpass filter
+    #         sos = butter(4, [low_cutoff, high_cutoff], btype='bandpass', fs=self.fps, output='sos')
+    #
+    #         # apply filter forward and backward (zero phase distortion): centers the signal around 0
+    #         det_signal: np.ndarray = sosfiltfilt(sos, signal_data)
+    #         return det_signal
+    #
+    #     def _robust_lowpass(signal_data: np.ndarray, high_cutoff: float = 15) -> np.ndarray:
+    #         if len(signal_data) < 15:
+    #             return signal_data
+    #         sos = butter(4, high_cutoff, btype='lowpass', fs=self.fps, output='sos')
+    #         return sosfiltfilt(sos, signal_data)
+    #
+    #     # detrend the raw signal
+    #     #detrended_signal: np.ndarray = _robust_detrend(raw_signal, low_cutoff=0.3, high_cutoff=15.0)
+    #     clean_signal: np.ndarray = _robust_lowpass(raw_signal, high_cutoff=15.0)
+    #
+    #     # 2) scouting for peaks and valleys using zero-crossings
+    #     window_size: int = int(self.fps * 1.0)
+    #
+    #     # ensure odd kernel size
+    #     if window_size % 2 == 0:
+    #         window_size += 1
+    #
+    #     # subtract the rolling median (only for scouting)
+    #     baseline_trend: np.ndarray = medfilt(volume=clean_signal, kernel_size=window_size)
+    #
+    #     # create zero-centered signal for peak-finding
+    #     detrended_signal: np.ndarray = clean_signal - baseline_trend
+    #
+    #     # extract zero-crossings by from dynamically centered scout signal
+    #     signs: np.ndarray = np.sign(detrended_signal)
+    #     signs[signs == 0] = 1
+    #     zero_crossings: np.ndarray = np.where(np.diff(signs))[0]
+    #
+    #     scout_peaks: list = []
+    #     scout_valleys: list = []
+    #
+    #     # only run if there are 2 or more zero_crossings (one period or more)
+    #     if len(zero_crossings) >= 2:
+    #         # move a window across the zero-crossings to capture all positive and negative area of the signal
+    #         for i in range(len(zero_crossings) - 1):
+    #             window_start, window_end = zero_crossings[i], zero_crossings[i + 1]
+    #             if (window_end - window_start) < (self.fps * cfg['min_segment_length']):
+    #                 continue
+    #             # extract the signal segment between the two current zero crossings
+    #             segment = detrended_signal[window_start:window_end]
+    #
+    #             # extract the peak/valley amplitudes and its index for the current segment
+    #             if np.mean(segment) > 0:
+    #                 scout_peaks.append({'idx': window_start + int(np.argmax(segment)), 'amp': np.max(segment)})
+    #             else:
+    #                 scout_valleys.append({'idx': window_start + int(np.argmin(segment)), 'amp': abs(np.min(segment))})
+    #
+    #     # abort if less than 2 peaks or no valleys were found
+    #     if len(scout_peaks) < 2 or len(scout_valleys) < 1:
+    #         features['extraction_status'] = 'failed_scout_pass'
+    #         return features
+    #
+    #     # calculate statistics from scouting (1-pass) the signal
+    #     median_peak_amp: float = float(np.median([p['amp'] for p in scout_peaks]))
+    #     median_valley_amp: float = float(np.median([v['amp'] for v in scout_valleys]))
+    #
+    #     scout_peak_indices: list = sorted([p['idx'] for p in scout_peaks])
+    #     median_period_samples: float = float(np.median(np.diff(scout_peak_indices)))
+    #
+    #     # 3) refining the scouted peaks and valleys
+    #
+    #     # dynamic tuning
+    #     prominence_threshold_peak: float = cfg['prominence_factor'] * median_peak_amp
+    #     prominence_threshold_valley = cfg['prominence_factor'] * median_valley_amp
+    #     distance_threshold = int(cfg['distance_factor'] * median_period_samples)
+    #     distance_threshold = max(distance_threshold, 1)
+    #
+    #     # find peaks using prominence
+    #     peak_idc, _ = find_peaks(detrended_signal,
+    #                              prominence=prominence_threshold_peak,
+    #                              distance=distance_threshold)
+    #
+    #     # find valleys
+    #     valley_idc, _ = find_peaks((-1)*detrended_signal,
+    #                                prominence=prominence_threshold_valley,
+    #                                distance=distance_threshold)
+    #
+    #     potential_peaks = [{'idx': i, 'amp': detrended_signal[i], 'type': 'peak'} for i in peak_idc]
+    #     potential_valleys = [{'idx': i, 'amp': abs(detrended_signal[i]), 'type': 'valley'} for i in valley_idc]
+    #
+    #     # filter the peaks
+    #     filtered_peaks = []
+    #     for p in potential_peaks:
+    #         # ceiling check
+    #         if cfg['max_peak_amp_diff'] and p['amp'] > 0:
+    #             if p['amp'] > (cfg['max_peak_amp_diff'] * median_peak_amp):
+    #                 continue
+    #
+    #         filtered_peaks.append(p)
+    #
+    #     # filter the valleys
+    #     filtered_valleys = []
+    #     for v in potential_valleys:
+    #         # ceiling check
+    #         if cfg['max_valley_amp_diff'] and v['amp'] > (cfg['max_valley_amp_diff'] * median_valley_amp):
+    #             continue
+    #
+    #         filtered_valleys.append(v)
+    #
+    #     # enforce alternation (peak-valley-peak-valley)
+    #     def _alternation_filter(peaks, valleys):
+    #         events_lst = sorted(peaks + valleys, key=lambda x: x['idx'])
+    #         if not events_lst:
+    #             return [], []
+    #
+    #         clean_events = [events_lst[0]]
+    #         for current in events_lst[1:]:
+    #             last = clean_events[-1]
+    #
+    #             if current['type'] == last['type']:
+    #
+    #                 if current['amp'] > last['amp']:
+    #                     clean_events.pop()
+    #                     clean_events.append(current)
+    #             else:
+    #                 clean_events.append(current)
+    #
+    #         return [e for e in clean_events if e['type'] == 'peak'], [e for e in clean_events if e['type'] == 'valley']
+    #
+    #     # get clean alternating peak and valley events
+    #     valid_peaks, valid_valleys = _alternation_filter(filtered_peaks, filtered_valleys)
+    #
+    #     features['valid_peaks_idx'] = [p['idx'] for p in valid_peaks]
+    #     features['valid_valleys_idx'] = [v['idx'] for v in valid_valleys]
+    #
+    #     if len(valid_peaks) < 2:
+    #         features['extraction_status'] = 'failed_insufficient_reps'
+    #         return features
+    #
+    #     # 4) metrics calculation
+    #
+    #     # period
+    #     peak_indices = [p['idx'] for p in valid_peaks]
+    #     period_diffs = np.diff(peak_indices) / self.fps
+    #     features.update(tb.get_descriptive_stats(np.array(period_diffs), 'period'))
+    #
+    #     # repetitions & frequency
+    #     avg_period = features['period_mean']
+    #     if avg_period > 0:
+    #         features['repetition_freq'] = round(1.0 / avg_period, 2)
+    #         valid_duration = (peak_indices[-1] - peak_indices[0]) / self.fps
+    #         features['repetition_num'] = round(valid_duration * features['repetition_freq'] + 1, 1)
+    #
+    #     # amplitude (peak-to-peak)
+    #     amplitudes = []
+    #     for p in valid_peaks:
+    #         p_idx = p['idx']
+    #         next_valleys = [v for v in valid_valleys if v['idx'] > p_idx]
+    #         if next_valleys:
+    #             v = next_valleys[0]
+    #             if (v['idx'] - p_idx) / self.fps < (1.5 * avg_period):
+    #                 # Calculate true ptp amplitude
+    #                 raw_p = detrended_signal[p['idx']]
+    #                 raw_v = detrended_signal[v['idx']]
+    #                 amplitudes.append(raw_p - raw_v)
+    #
+    #     if amplitudes:
+    #         features.update(tb.get_descriptive_stats(np.array(amplitudes), 'amplitude'))
+    #
+    #     # velocities
+    #     velocity_curve = np.gradient(detrended_signal, 1 / self.fps)
+    #     rise_vels, fall_vels = [], []
+    #     all_events = sorted(valid_peaks + valid_valleys, key=lambda x: x['idx'])
+    #
+    #     for i in range(len(all_events) - 1):
+    #         curr, next_evt = all_events[i], all_events[i + 1]
+    #         start, end = curr['idx'], next_evt['idx']
+    #
+    #         start = max(0, start)
+    #         end = min(len(velocity_curve), end)
+    #
+    #         if start < end:
+    #             vel_seg = velocity_curve[start:end]
+    #             if len(vel_seg) > 0:
+    #                 if next_evt['type'] == 'peak':
+    #                     rise_vels.append(np.max(vel_seg))
+    #                 else:
+    #                     fall_vels.append(np.min(vel_seg))
+    #
+    #     features.update(tb.get_descriptive_stats(np.array(rise_vels), 'velocity_pos'))
+    #     features.update(tb.get_descriptive_stats(np.array(fall_vels), 'velocity_neg'))
+    #
+    #     # extraction successful
+    #     features['extraction_status'] = 'success'
+    #     features['signal_original'] = clean_signal
+    #     features['signal_baseline'] = baseline_trend
+    #     features['signal_detrended'] = detrended_signal
+    #     features['time_axis'] = np.arange(len(detrended_signal)) / self.fps
+    #
+    #     return features

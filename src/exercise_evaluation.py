@@ -450,6 +450,8 @@ class ExerciseEvaluator:
 
         active_dist_dict: dict = {}
         finger_digits = ['2', '3', '4', '5']        # index, middle, ring, pinky
+        all_kcr_arrays = []
+        all_ang_arrays = []
 
         for digit in finger_digits:
             # vectorized matrix extraction from dataframe
@@ -507,57 +509,54 @@ class ExerciseEvaluator:
                 'angle_score': angle_score_arr,
                 'features': feature_dict
             }
+            all_kcr_arrays.append(kcr_arr)
+            all_ang_arrays.append(angle_score_arr)
 
-        # 1.2) correctness of opening & closing (completeness of movement)
+        # 1.2) average signal extraction
+        # calculate the average signals across all four fingers for whole-hand scoring
+        avg_kcr_arr = np.mean(all_kcr_arrays, axis=0)
+        avg_ang_arr = np.mean(all_ang_arrays, axis=0)
 
-        # get all peak and valley kcr and angle values
-        all_peak_kcr: list = []
-        all_peak_ang: list = []
-        all_valley_kcr: list = []
-        all_valley_ang: list = []
+        # extract features on the averaged signal
+        avg_performance_features = self.kf.calc_kinematic_parameters(avg_kcr_arr, ex_peak_cfg)
 
-        for finger_data in active_dist_dict.values():
-            kcr = finger_data['normalized_distance']
-            ang = finger_data['angle_score']
-            peaks = finger_data['features']['valid_peaks_idx']
-            valleys = finger_data['features']['valid_valleys_idx']
+        # re-calculate amplitudes for the average signal
+        avg_valid_peaks = avg_performance_features.get('valid_peaks_idx', [])
+        if len(avg_valid_peaks) > 0:
+            avg_peak_amps = avg_kcr_arr[avg_valid_peaks]
+            avg_performance_features['amplitude_mean'] = float(np.mean(avg_peak_amps))
+            avg_performance_features['amplitude_pct_90'] = float(np.percentile(avg_peak_amps, 90))
+            avg_amp_mean = avg_performance_features['amplitude_mean']
+            avg_performance_features['amplitude_cov'] = float(
+                (np.std(avg_peak_amps) / avg_amp_mean) * 100) if avg_amp_mean > 0 else 0.0
 
-            all_peak_kcr.extend(kcr[peaks])
-            all_peak_ang.extend(ang[peaks])
-            all_valley_kcr.extend(kcr[valleys])
-            all_valley_ang.extend(ang[valleys])
-
-        # extension score (hand open)
-        all_peak_kcr_arr: np.ndarray = np.array(all_peak_kcr)
-        all_peak_ang_arr: np.ndarray = np.array(all_peak_ang)
-        if all_peak_kcr_arr.size > 0 and all_peak_ang_arr.size > 0:
-            extension_score: float = float((np.mean(all_peak_kcr) * 100 + np.mean(all_peak_ang) * 100) / 2.0)
+        # 1.3) Correctness of Opening & Closing (Completeness)
+        # extension score (hand open) - graded average signal peaks
+        if len(avg_valid_peaks) > 0:
+            extension_score: float = float(
+                (np.mean(avg_kcr_arr[avg_valid_peaks]) * 100 + np.mean(avg_ang_arr[avg_valid_peaks]) * 100) / 2.0)
         else:
             extension_score: float = 0.0
 
-        # flexion score (hand closed)
-        if all_valley_kcr:
-            # map KCR to 100% (assumption: 0.25 is a perfectly tight fist) <- this value may require tuning in config
+        # flexion score (hand closed) - graded average signal valleys
+        avg_valid_valleys = avg_performance_features.get('valid_valleys_idx', [])
+        if len(avg_valid_valleys) > 0:
             min_dist_kcr: float = config['open_close'].get('fist_min_dist', 0.25)
-            kcr_mapped: np.ndarray = np.clip(1.0 - (np.array(all_valley_kcr) - min_dist_kcr) / (1.0 - min_dist_kcr), 0.0, 1.0)
-            flex_kcr_score: float = float(np.mean(kcr_mapped) * 100)
-
-            # angle score 0.0 is perfect flexion -> map to 100%
-            ang_mapped: np.ndarray = np.clip(1.0 - np.array(all_valley_ang), 0.0, 1.0)
-            flex_ang_score: float = float(np.mean(ang_mapped) * 100)
-            flexion_score: float = (flex_kcr_score + flex_ang_score) / 2.0
+            kcr_mapped: np.ndarray = np.clip(
+                1.0 - (avg_kcr_arr[avg_valid_valleys] - min_dist_kcr) / (1.0 - min_dist_kcr), 0.0, 1.0)
+            ang_mapped: np.ndarray = np.clip(1.0 - avg_ang_arr[avg_valid_valleys], 0.0, 1.0)
+            flexion_score: float = float((np.mean(kcr_mapped) * 100 + np.mean(ang_mapped) * 100) / 2.0)
         else:
             flexion_score: float = 0.0
 
-        # 1.3) quality: temporal dispersion
+        # 1.4) Quality: Temporal Dispersion (Synchronization)
         dispersion_variances = []
 
-        # index finger is the reference to solve the problem of missing events (peaks/valleys) of the other fingers
+        # index finger remains the synchronization reference
         index_key = f'{wrist_name}-{finger_names[0]}'
         index_peaks = active_dist_dict[index_key]['features']['valid_peaks_idx']
-
         passive_finger_keys = [f'{wrist_name}-{pf}' for pf in finger_names[1:]]
-        max_lag_frames: int = int(self.fps * 0.5)   # allow max. 0.5 seconds of lag
+        max_lag_frames: int = int(self.fps * 0.5)  # allow max. 0.5 seconds of lag
 
         for index_peak in index_peaks:
             rep_timing = [index_peak]
@@ -567,19 +566,14 @@ class ExerciseEvaluator:
                 if len(passive_peaks) == 0:
                     continue
 
-                # find the closest peak between the index finger and the passive fingers
                 closest_peak = min(passive_peaks, key=lambda x: abs(x - index_peak))
-
-                # closest peak belongs to this repetition if it appears within the same half of a second
                 if abs(closest_peak - index_peak) < max_lag_frames:
                     rep_timing.append(closest_peak)
 
-            # calculate the standard deviation if all 4 fingers participated in the current repetition
             if len(rep_timing) == 4:
                 dispersion_sec = np.std(rep_timing) / self.fps
                 dispersion_variances.append(dispersion_sec)
 
-        # calculate the final synchronization score (lower is better)
         synchronization_score: float = float(np.mean(dispersion_variances)) if dispersion_variances else 0.0
 
         # 2) extract general metrics (e.g., task impairment by spectrogram)
@@ -590,8 +584,24 @@ class ExerciseEvaluator:
 
         # 5) Create result dictionary
 
-        # flatten the performance metrics of the active finger
-        performance_features = active_dist_dict[index_key]['features']
+        # calculate the average normalized distance across all four fingers
+        avg_kcr_arr = np.mean(all_kcr_arrays, axis=0)
+
+        # extract features on the averaged signal
+        avg_performance_features = self.kf.calc_kinematic_parameters(avg_kcr_arr, ex_peak_cfg)
+
+        # recalculate amplitudes for the average signal
+        avg_valid_peaks = avg_performance_features.get('valid_peaks_idx', [])
+        if len(avg_valid_peaks) > 0:
+            avg_peak_amps = avg_kcr_arr[avg_valid_peaks]
+            avg_performance_features['amplitude_mean'] = float(np.mean(avg_peak_amps))
+            avg_performance_features['amplitude_pct_90'] = float(np.percentile(avg_peak_amps, 90))
+            avg_amp_mean = avg_performance_features['amplitude_mean']
+            avg_performance_features['amplitude_cov'] = float(
+                (np.std(avg_peak_amps) / avg_amp_mean) * 100) if avg_amp_mean > 0 else 0.0
+
+        # flatten the performance metrics using the average hand movement
+        performance_features = avg_performance_features
 
         # add exercise specific prefix-key 'open_close'
         results = {
