@@ -319,7 +319,7 @@ class KinematicFeatures:
         features['extraction_status'] = 'success'
         features['signal_original'] = clean_signal
         features['time_axis'] = np.arange(len(clean_signal)) / self.fps
-
+        features['raw_amplitudes'] = np.array(amplitudes)
         return features
 
     def calc_flexion_angle(self, seg_vec_1: np.ndarray, seg_vec_2: np.ndarray) -> np.ndarray:

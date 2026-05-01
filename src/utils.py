@@ -171,22 +171,28 @@ class ToolBox:
     @staticmethod
     def apply_delta_rotation(vec_raw: np.ndarray, vec_clean: np.ndarray, rot_raw: np.ndarray) -> np.ndarray:
         """Calculates the minimal delta rotation necessary to reposition the old landmarks onto the new landmarks."""
+        # vector normalization
         vec_raw_u: np.ndarray = vec_raw / np.linalg.norm(vec_raw, axis=1, keepdims=True)
         vec_clean_u: np.ndarray = vec_clean / np.linalg.norm(vec_clean, axis=1, keepdims=True)
 
+        # finding the axis of rotation
         rot_axis: np.ndarray = np.cross(vec_raw_u, vec_clean_u)
         axis_norm: np.ndarray = np.linalg.norm(rot_axis, axis=1, keepdims=True)
-
         valid_mask: np.ndarray = (axis_norm > 1e-8).flatten()
         rot_axis[valid_mask] = rot_axis[valid_mask] / axis_norm[valid_mask]
 
+        # finding the angle of rotation
         dot_prod: np.ndarray = np.sum(vec_raw_u * vec_clean_u, axis=1)
         rot_angle = np.arccos(np.clip(dot_prod, -1.0, 1.0))
 
+        # constructing the Euler vector from the found axis and angle
         rot_vecs = np.zeros_like(rot_axis)
         rot_vecs[valid_mask] = rot_axis[valid_mask] * rot_angle[valid_mask, np.newaxis]
 
+        # creating the delta rotation matrix
         r_delta = Rotation.from_rotvec(rot_vecs).as_matrix()
+
+        # apply the delta rotation to the original rotation matrix using matrix multiplication
         r_clean = np.einsum('fij,fjk->fik', r_delta, rot_raw)
 
         return r_clean
@@ -259,7 +265,7 @@ class ToolBox:
             valid_df.loc[:,col] = arr
 
         # Butterworth filtering
-        b, a = butter(N=BUTTER_ORDER, Wn=CUTOFF_FREQ, btype='low', fs=self.fps)
+        b, a = butter(N=BUTTER_ORDER, Wn=CUTOFF_FREQ, btype='low', fs=self.fps, output='sos')
 
         # calculate padding (1.0 second)
         padlen: int = int(1.0 * self.fps)
@@ -646,7 +652,7 @@ class ToolBox:
     @staticmethod
     def calculate_3d_segment_lengths(df: pd.DataFrame, link_lst: list[list[str]]) -> pd.DataFrame:
         """
-        Calculates the 3D segment lengths for all frames in the DataFrame using vectorized operations.
+        Calculates the 3D segment lengths for all frames in the DataFrame.
 
         Args:
             df (pd.DataFrame): dataframe containing 'landmark_x', 'landmark_y', 'landmark_z' landmarks.

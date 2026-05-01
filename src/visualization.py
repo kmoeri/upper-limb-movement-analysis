@@ -2,14 +2,17 @@
 
 # libraries
 import os
+import colorsys
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm
+import matplotlib.colors as mc
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.animation as animation
-from prompt_toolkit.contrib.telnet import TelnetServer
+from matplotlib.lines import Line2D
+from pandas import pivot
 from scipy import stats
 
 # modules
@@ -40,15 +43,120 @@ class Visualizer:
     # ============================================================================= #
     #                            2) TEMPORAL CONSISTENCY                            #
     # ============================================================================= #
-    def vis_consistency_raincloud(self, link_df: pd.DataFrame, columns_to_plot: list[str],
-                                   title: str = '', x_label: str = '', y_label: str = '') -> None:
+    def vis_hand_consistency_raincloud(self, df: pd.DataFrame, states_to_plot: list[str],
+                                       title: str = '', x_label: str = '', y_label: str = '') -> None:
         """
         Generates and saves a raincloud plot (combination of a half-violin, boxplot, and stripplot)
         to visualize the distribution of temporal consistency (CoV) across different body segments.
 
         Args:
-            link_df (pd.DataFrame): DataFrame containing the CoV data for the selected segments.
-            columns_to_plot (list[str]): List of column names (segments) to include in the plot.
+            df (pd.DataFrame): DataFrame containing the CoV data for all segments.
+            states_to_plot (list[str]): List of states to plot.
+            title (str, optional): Title of the plot and base name for the saved file. Defaults to ''.
+            x_label (str, optional): Label for the x-axis. Defaults to ''.
+            y_label (str, optional): Label for the y-axis. Defaults to ''.
+
+        Returns:
+            None
+        """
+
+        sns.set_theme(style="whitegrid")
+        link_palette = sns.color_palette("Set2", len(states_to_plot))
+
+        if not states_to_plot:
+            print("Error: states_to_plot list is empty.")
+            return
+
+        # map columns to colors
+        column_colors = dict(zip(states_to_plot, link_palette))
+
+        fig, ax = plt.subplots(figsize=(2.5 * len(states_to_plot), 6))
+
+        # loop through each state to plot one by one
+        for i, state_name in enumerate(states_to_plot):
+
+            # extract data for the current state
+            subset = df[df['State'] == state_name]['CoV'].dropna().values
+            if len(subset) == 0:
+                continue
+
+            color = column_colors[state_name]
+
+            # violin plot representing the density
+            violin_plot = sns.violinplot(
+                x=[i] * len(subset), y=subset,
+                inner=None, cut=0, bw_method=0.2, linewidth=0,
+                color=color, ax=ax, alpha=0.6,
+                zorder=1
+            )
+
+            # mask left half of violin plot
+            try:
+                violin = ax.collections[-1]
+                path = violin.get_paths()[0]
+                vertices = path.vertices
+                # find the mean X position of the vertices for the center line
+                mean_x = np.mean(vertices[:, 0])
+                # set all X-vertices to be AT LEAST the mean X, effectively clipping the left side
+                vertices[:, 0] = np.maximum(vertices[:, 0], mean_x)
+
+            except IndexError:
+                pass
+
+            # boxplot
+            sns.boxplot(
+                x=[i] * len(subset),
+                y=subset,
+                whis=1.5,
+                width=0.1,
+                showcaps=True,
+                boxprops={'facecolor': 'white', 'edgecolor': 'black', 'zorder': 3},
+                whiskerprops={'color': 'black', 'zorder': 3},
+                flierprops={'marker': ''},
+                medianprops={'color': 'black', 'zorder': 3},
+                ax=ax
+            )
+
+            # stripplot
+            # jitter = np.random.normal(loc=-0.2, scale=0.05, size=len(subset))
+            jitter = np.random.uniform(low=-0.3, high=-0.1, size=len(subset))
+            ax.scatter(
+                np.full_like(subset, i) + jitter,
+                subset,
+                color=color, alpha=0.3, s=30, edgecolor='none',
+                zorder=2
+            )
+
+        ax.set_xticks(range(len(states_to_plot)))
+        ax.set_xticklabels([name.replace('-', ' ').title() for name in states_to_plot])
+        ax.set_xlabel(x_label, fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+
+        # y-axis limits and steps
+        max_val = df[df['State'].isin(states_to_plot)]['CoV'].max()
+        y_max = np.ceil(max_val * 1.15) if not np.isnan(max_val) else 10.0
+        ax.set_ylim(0.0, y_max)
+
+        fig.suptitle(title, fontsize=14, y=0.98)
+        plt.tight_layout()
+
+        suffix = '.png'
+        f_name: str = title.replace(' ', '_') + suffix
+        f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600)
+
+        plt.close()
+
+    def vis_arm_consistency_raincloud(self, df: pd.DataFrame, states_to_plot: list[str],
+                                      title: str = '', x_label: str = '', y_label: str = '') -> None:
+        """
+        Generates and saves a raincloud plot (combination of a half-violin, boxplot, and stripplot)
+        to visualize the distribution of temporal consistency (CoV) across different body segments.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing the CoV data for all segments.
+            states_to_plot (list[str]): List of states to plot.
             title (str, optional): Title of the plot and base name for the saved file. Defaults to ''.
             x_label (str, optional): Label for the x-axis. Defaults to ''.
             y_label (str, optional): Label for the y-axis. Defaults to ''.
@@ -150,70 +258,67 @@ class Visualizer:
 
         plt.close()
 
-    def viz_comparison_subplots(self, segment_df, segment_order: list[str],
-                                segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
-        """
-        Generates and saves a two-panel figure containing a grouped boxplot comparing the healthy
-        and affected sides, and a raincloud plot presenting the distribution of the affected side.
+    # def viz_comparison_subplots(self, segment_df, segment_order: list[str],
+    #                             segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+    #     """
+    #     Generates and saves a two-panel figure containing a grouped boxplot comparing the healthy
+    #     and affected sides, and a raincloud plot presenting the distribution of the affected side.
+    #
+    #     Args:
+    #         segment_df (pd.DataFrame): DataFrame containing the CoV, Side, and segment data.
+    #         segment_order (list[str]): Ordered list of segments to plot on the x-axis.
+    #         segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+    #         body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
+    #
+    #     Returns:
+    #         None
+    #     """
+    #     fig, axes = plt.subplots(1, 2, figsize=(16, 6), gridspec_kw={'width_ratios': [1, 1]})
+    #
+    #     # subplot 1: grouped boxplot
+    #     sns.boxplot(data=segment_df,
+    #                 x=segment_col,
+    #                 y='CoV',
+    #                 hue='Side',
+    #                 ax=axes[0],
+    #                 palette='Set2',
+    #                 order=segment_order)
+    #
+    #     axes[0].set_title('Comparison: Healthy vs. Affected Side')
+    #     axes[0].set_ylabel('Mean CoV (%)')
+    #     axes[0].set_xlabel(segment_col.replace('_', ' '))
+    #
+    #     # subplot 2: raincloud of affected side - violin/strip combination
+    #     df_aff = segment_df[segment_df['Side'] == 'Affected']
+    #     sns.violinplot(
+    #         data=df_aff, x=segment_col, y='CoV',
+    #         ax=axes[1], inner=None, color=".8", order=segment_order
+    #     )
+    #     sns.stripplot(
+    #         data=df_aff, x=segment_col, y='CoV',
+    #         ax=axes[1], alpha=0.4, order=segment_order
+    #     )
+    #     axes[1].set_title(f'Distribution of Affected {body_part} Stability')
+    #     axes[1].set_ylabel('Mean CoV (%)')
+    #     axes[1].set_xlabel(segment_col.replace('_', ' '))
+    #
+    #     plt.tight_layout()
+    #
+    #     suffix = '.png'
+    #     f_name: str = f'Distribution_of_Affected_Side_Stability_{body_part}{suffix}'
+    #     f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+    #     if not os.path.exists(f_path):
+    #         plt.savefig(f_path, format=suffix[1:], dpi=600)
+    #
+    #     plt.close()
 
-        Args:
-            segment_df (pd.DataFrame): DataFrame containing the CoV, Side, and segment data.
-            segment_order (list[str]): Ordered list of segments to plot on the x-axis.
-            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
-            body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
-
-        Returns:
-            None
-        """
-        fig, axes = plt.subplots(1, 2, figsize=(16, 6), gridspec_kw={'width_ratios': [1, 1]})
-
-        # subplot 1: grouped boxplot
-        sns.boxplot(data=segment_df,
-                    x=segment_col,
-                    y='CoV',
-                    hue='Side',
-                    ax=axes[0],
-                    palette='Set2',
-                    order=segment_order)
-
-        axes[0].set_title('Comparison: Healthy vs. Affected Side')
-        axes[0].set_ylabel('Mean CoV (%)')
-        axes[0].set_xlabel(segment_col.replace('_', ' '))
-
-        # subplot 2: raincloud of affected side - violin/strip combination
-        df_aff = segment_df[segment_df['Side'] == 'Affected']
-        sns.violinplot(
-            data=df_aff, x=segment_col, y='CoV',
-            ax=axes[1], inner=None, color=".8", order=segment_order
-        )
-        sns.stripplot(
-            data=df_aff, x=segment_col, y='CoV',
-            ax=axes[1], alpha=0.4, order=segment_order
-        )
-        axes[1].set_title(f'Distribution of Affected {body_part} Stability')
-        axes[1].set_ylabel('Mean CoV (%)')
-        axes[1].set_xlabel(segment_col.replace('_', ' '))
-
-        plt.tight_layout()
-
-        suffix = '.png'
-        f_name: str = f'Distribution_of_Affected_Side_Stability_{body_part}{suffix}'
-        f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
-        if not os.path.exists(f_path):
-            plt.savefig(f_path, format=suffix[1:], dpi=600)
-
-        plt.close()
-
-    def viz_comparison_boxplot(self, segment_df: pd.DataFrame, segment_order: list[str],
-                               segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+    def viz_comparison_boxplot(self, segment_df: pd.DataFrame, body_part: str = 'Hand') -> None:
         """
         Generates and saves a 4-way grouped boxplot comparing the temporal consistency (CoV)
         across Active/Passive roles and Healthy/Affected conditions.
 
         Args:
             segment_df (pd.DataFrame): DataFrame containing CoV, State, and segment data.
-            segment_order (list[str]): Ordered list of segments to plot on the x-axis.
-            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
             body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
 
         Returns:
@@ -222,7 +327,7 @@ class Visualizer:
 
         sns.set_style('white')
 
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(10, 6))
 
         # custom palette for the four states
         custom_palette = {
@@ -233,22 +338,23 @@ class Visualizer:
         }
 
         # order of the legend and bars
-        hue_order = ['Healthy (Active)', 'Healthy (Passive)', 'Affected (Active)', 'Affected (Passive)']
+        state_order = ['Healthy (Active)', 'Healthy (Passive)', 'Affected (Active)', 'Affected (Passive)']
 
         ax = sns.boxplot(data=segment_df,
-                         x=segment_col,
+                         x='State',
                          y='CoV',
                          hue='State',
                          palette=custom_palette,
-                         hue_order=hue_order,
-                         order=segment_order)
+                         order=state_order,
+                         dodge=False)
 
         plt.title(f'Temporal Consistency: Active vs. Passive {body_part}', fontsize=14)
         plt.ylabel('Mean CoV (%)', fontsize=12)
-        plt.xlabel(segment_col.replace('_', ' '), fontsize=12)
+        plt.xlabel('Hand State', fontsize=12)
 
-        # legend placed outside the plot to prevent it from covering data
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title=f'{body_part} State')
+        # legend not necessary
+        if ax.legend_:
+            ax.legend_.remove()
 
         # dynamic y-axis scaling
         max_cov: float = segment_df['CoV'].max()
@@ -289,35 +395,175 @@ class Visualizer:
 
         plt.close()
 
-    def viz_normality_qq_plots(self, paired_df: pd.DataFrame, segment_order: list[str],
-                               segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+    # def viz_finger_comparison_boxplot(self, segment_df: pd.DataFrame, segment_order: list[str],
+    #                                   segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+    #     """
+    #     Generates and saves a 4-way grouped boxplot comparing the temporal consistency (CoV)
+    #     across Active/Passive roles and Healthy/Affected conditions.
+    #
+    #     Args:
+    #         segment_df (pd.DataFrame): DataFrame containing CoV, State, and segment data.
+    #         segment_order (list[str]): Ordered list of segments to plot on the x-axis.
+    #         segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+    #         body_part (str, optional): Name of the body part being analyzed, used for titles and filenames. Defaults to 'Hand'.
+    #
+    #     Returns:
+    #         None
+    #     """
+    #
+    #     sns.set_style('white')
+    #
+    #     plt.figure(figsize=(12, 6))
+    #
+    #     # custom palette for the four states
+    #     custom_palette = {
+    #         'Healthy (Active)': '#1f77b4',  # dark blue
+    #         'Healthy (Passive)': '#aec7e8', # light blue
+    #         'Affected (Active)': '#d62728', # dark red
+    #         'Affected (Passive)': '#ff9896' # light red
+    #     }
+    #
+    #     # order of the legend and bars
+    #     hue_order = ['Healthy (Active)', 'Healthy (Passive)', 'Affected (Active)', 'Affected (Passive)']
+    #
+    #     ax = sns.boxplot(data=segment_df,
+    #                      x=segment_col,
+    #                      y='CoV',
+    #                      hue='State',
+    #                      palette=custom_palette,
+    #                      hue_order=hue_order,
+    #                      order=segment_order)
+    #
+    #     plt.title(f'Temporal Consistency: Active vs. Passive {body_part}', fontsize=14)
+    #     plt.ylabel('Mean CoV (%)', fontsize=12)
+    #     plt.xlabel(segment_col.replace('_', ' '), fontsize=12)
+    #
+    #     # legend placed outside the plot to prevent it from covering data
+    #     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title=f'{body_part} State')
+    #
+    #     # dynamic y-axis scaling
+    #     max_cov: float = segment_df['CoV'].max()
+    #
+    #     # set the ceiling 15% higher than the max value
+    #     ceiling: float = max_cov * 1.15
+    #
+    #     if ceiling <= 5.0:
+    #         step = 0.5          # steps: 0.5%
+    #     elif ceiling <= 15.0:
+    #         step = 2.0          # steps: 2.0%
+    #     else:
+    #         step = 5.0          # steps: 5.0%
+    #
+    #     # create tick marks
+    #     ticks: np.ndarray = np.arange(0, np.ceil(ceiling) + step, step)
+    #
+    #     # format labels
+    #     labels: list = [f'{tick:.1f}' if step < 1 else f'{int(tick)}' for tick in ticks]
+    #
+    #     # apply limits, ticks, and labels
+    #     plt.ylim(0, ticks[-1])
+    #     plt.yticks(ticks, labels=labels)
+    #
+    #     # force horizontal grid
+    #     ax.yaxis.grid(True, color='lightgrey', linestyle='-', linewidth=1.0)
+    #     ax.xaxis.grid(False)
+    #     ax.set_axisbelow(True)
+    #
+    #     plt.tight_layout()
+    #
+    #     # save plot
+    #     suffix = '.png'
+    #     f_name: str = f'4-Way_Consistency_Boxplot_{body_part}{suffix}'
+    #     f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+    #     if not os.path.exists(f_path):
+    #         plt.savefig(f_path, format=suffix[1:], dpi=600)
+    #
+    #     plt.close()
+
+    # def viz_normality_qq_plots(self, paired_df: pd.DataFrame, segment_order: list[str],
+    #                            segment_col: str = 'Finger', body_part: str = 'Hand') -> None:
+    #     """
+    #     Generates and saves a grid of Q-Q plots to visually assess the normality of paired
+    #     differences (Healthy vs. Affected) for each body segment, including the Shapiro-Wilk p-value.
+    #
+    #     Args:
+    #         paired_df (pd.DataFrame): DataFrame containing paired CoV data for Healthy and Affected conditions.
+    #         segment_order (list[str]): Ordered list of segments to generate subplots for.
+    #         segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
+    #         body_part (str, optional): Name of the body part being analyzed, used for filenames. Defaults to 'Hand'.
+    #
+    #     Returns:
+    #         None
+    #     """
+    #     # create a 3x2 grid
+    #     fig, axes = plt.subplots(3, 2, figsize=(10, 15))
+    #
+    #     # flatten the 2D array so we can use a single index 'i'
+    #     axes_flat = axes.flatten()
+    #
+    #     for i, segment in enumerate(segment_order):
+    #         # select the specific subplot for this finger
+    #         ax = axes_flat[i]
+    #
+    #         segment_data = paired_df[paired_df[segment_col] == segment]
+    #         differences = (segment_data['Healthy'] - segment_data['Affected']).dropna()
+    #         print(f'N: {len(differences)}')
+    #         if len(differences) >= 3:
+    #             _, p_val = stats.shapiro(differences)
+    #             norm_text = f"Shapiro p={p_val:.3f}"
+    #             stats.probplot(differences, dist="norm", plot=ax)
+    #         else:
+    #             norm_text = "N too small"
+    #             ax.text(0.5, 0.5, 'Insufficient Data', ha='center')
+    #
+    #         ax.set_title(f'Q-Q Plot: {segment}\n{norm_text}')
+    #
+    #         # formatting for a 2-column layout
+    #         ax.set_ylabel('Sample Quantiles' if i % 2 == 0 else '')
+    #         ax.set_xlabel('Theoretical Quantiles')
+    #
+    #     # hide the 6th empty subplot
+    #     if len(segment_order) < len(axes_flat):
+    #         axes_flat[-1].axis('off')
+    #
+    #     plt.tight_layout()
+    #
+    #     suffix = '.png'
+    #     f_name: str = f'QQ_Plots_{body_part}{suffix}'
+    #     f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+    #     if not os.path.exists(f_path):
+    #         plt.savefig(f_path, format=suffix[1:], dpi=600)
+    #
+    #     plt.close()
+
+    def viz_normality_qq_plots(self, paired_df: pd.DataFrame, body_part: str = 'Hand') -> None:
         """
         Generates and saves a grid of Q-Q plots to visually assess the normality of paired
         differences (Healthy vs. Affected) for each body segment, including the Shapiro-Wilk p-value.
 
         Args:
             paired_df (pd.DataFrame): DataFrame containing paired CoV data for Healthy and Affected conditions.
-            segment_order (list[str]): Ordered list of segments to generate subplots for.
-            segment_col (str, optional): Name of the column representing the body segments. Defaults to 'Finger'.
             body_part (str, optional): Name of the body part being analyzed, used for filenames. Defaults to 'Hand'.
 
         Returns:
             None
         """
         # create a 3x2 grid
-        fig, axes = plt.subplots(3, 2, figsize=(10, 15))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        roles: list[str] = ['Healthy', 'Affected']
 
-        # flatten the 2D array so we can use a single index 'i'
-        axes_flat = axes.flatten()
+        # aggreate the raw segments into 1 mean value per participant per condition/role
+        agg_df: pd.DataFrame = paired_df.groupby(['Participant', 'Hand_Condition', 'Hand_Role'])['CoV'].mean().reset_index()
 
-        for i, segment in enumerate(segment_order):
+        for i, role in enumerate(roles):
             # select the specific subplot for this finger
-            ax = axes_flat[i]
+            ax = axes[i]
 
-            segment_data = paired_df[paired_df[segment_col] == segment]
-            differences = (segment_data['Healthy'] - segment_data['Affected']).dropna()
-            print(f'N: {len(differences)}')
-            if len(differences) >= 3:
+            role_data = agg_df[agg_df['Hand_Role'] == role]
+            pivot_data = role_data.pivot(index='Participant', columns='Hand_Condition', values='CoV').dropna()
+
+            if not pivot_data.empty and len(pivot_data) >= 3:
+                differences = pivot_data['Healthy'] - pivot_data['Affected']
                 _, p_val = stats.shapiro(differences)
                 norm_text = f"Shapiro p={p_val:.3f}"
                 stats.probplot(differences, dist="norm", plot=ax)
@@ -325,15 +571,11 @@ class Visualizer:
                 norm_text = "N too small"
                 ax.text(0.5, 0.5, 'Insufficient Data', ha='center')
 
-            ax.set_title(f'Q-Q Plot: {segment}\n{norm_text}')
+            ax.set_title(f'Q-Q Plot: {role} {body_part}\n{norm_text}')
 
             # formatting for a 2-column layout
-            ax.set_ylabel('Sample Quantiles' if i % 2 == 0 else '')
+            ax.set_ylabel('Sample Quantiles' if i == 0 else '')
             ax.set_xlabel('Theoretical Quantiles')
-
-        # hide the 6th empty subplot
-        if len(segment_order) < len(axes_flat):
-            axes_flat[-1].axis('off')
 
         plt.tight_layout()
 
@@ -452,19 +694,20 @@ class Visualizer:
     # ============================================================================= #
     #                            3) PARAMETER EXTRACTION                            #
     # ============================================================================= #
-    def viz_repetitive_binary_exercises(self, time_axis: np.ndarray, signal: np.ndarray, features: dict,
+    def viz_repetitive_binary_exercises(self, time_axis, signal, features,
                                         p_id: str = '', visit_id: str = '', ex_id: str = ''):
         """
         Visualizes the timeseries of the repetitive binary exercises:
         - FingerTapping (index finger tapping)
+        - FingerAlternation (fingertips to thumb fingertip)
         - HandOpening (hand opening and closing)
         - ProSup (pronation supination)
         Plots the detrended signal, marked peaks, marked valleys, and the zero-crossing baseline.
 
         Args:
-            time_axis (np.ndarray): Time values (x-axis).
-            signal (np.ndarray): The signal used for detection (usually the DETRENDED signal).
-            features (dict): Output dictionary from 'extract_irregular_movements_parameters'.
+            time_axis (list | np.ndarray): Time values (x-axis).
+            signal (list | np.ndarray): The signal used for detection (usually the DETRENDED signal).
+            features (list | dict): Output dictionary from 'extract_irregular_movements_parameters'.
             visit_id (str, optional): Visit ID. Defaults to ''.
             p_id (str): Participant identifier key. Defaults to ''.
             ex_id (str): Experiment identifier key. Defaults to ''.
@@ -473,57 +716,124 @@ class Visualizer:
             None
         """
 
-        fig, ax = plt.subplots(figsize=(16, 6))
+        # helper function for color shades
+        def adjust_lightness(color_in, amount):
+            c = mc.to_rgb(color_in)
+            c = colorsys.rgb_to_hls(*c)
+            color_out = colorsys.hls_to_rgb(c[0], max(0, min(1, amount * c[1])), c[2])
+            return color_out
 
-        # plot the main signal
-        ax.plot(time_axis, signal, color='black', linewidth=1.5, alpha=0.7, label=ex_id, zorder=2)
+        # check input is a list of one or more signals
+        signals = signal if isinstance(signal, list) else [signal]
+        feature_list = features if isinstance(features, list) else [features]
+        t_axis = time_axis[0] if isinstance(time_axis, list) else time_axis
 
-        # dynamic baseline
-        # baseline = features.get('signal_baseline', [])
-        # if len(baseline) > 0:
-        #     ax.plot(time_axis, baseline, color='grey', linestyle='--', label='dynamic baseline', zorder=1)
-        # else:
-        #     ax.axhline(0, color='gray', linestyle='--', label='zero-crossing baseline', zorder=1)
+        num_signals = len(signals)
 
-        # plot valid peaks (green up-triangles)
-        peak_indices = features.get('valid_peaks_idx', [])
-        if len(peak_indices) > 0:
-            ax.scatter(time_axis[peak_indices], signal[peak_indices],
-                       marker='^', s=80, facecolor='#00CC96', edgecolor='black',
-                       linewidth=1, label='valid peaks', zorder=3)
+        # dynamically scale figure height based on number of subplots
+        fig_heigth = 6 if num_signals == 1 else (3 * num_signals)
+        fig, axes = plt.subplots(nrows=num_signals, ncols=1, figsize=(16, fig_heigth), sharex=True)
 
-        # plot valid valleys (red down-triangles)
-        valley_indices = features.get('valid_valleys_idx', [])
-        if len(valley_indices) > 0:
-            ax.scatter(time_axis[valley_indices], signal[valley_indices],
-                       marker='v', s=80, facecolor='#EF553B', edgecolor='black',
-                       linewidth=1, label='valid valleys', zorder=3)
+        # ensure axes is an iterable list
+        if num_signals == 1:
+            axes = [axes]
 
-        # add annotation for extracted metrics
-        metrics_text = (f"Reps: {features.get('repetition_num', 0):.1f} | "
-                        f"Freq: {features.get('repetition_freq', 0):.2f} Hz\n"
-                        f"Mean Amp: {features.get('amplitude_mean', 0):.2f} | "
-                        f"Mean Period: {features.get('period_mean', 0):.2f}s")
+        # color palette
+        base_colors: list[str] = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        alt_labels: list[str] = ['Index', 'Middle', 'Ring', 'Pinky']
 
-        # position text in the top-left corner (axes coordinates: 0 to 1)
-        ax.text(1.0, 0.96, metrics_text, transform=ax.transAxes,
-                verticalalignment='top', horizontalalignment='left',
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9),
-                fontsize=10, zorder=4)
+        # pre-calculate shared y-limits for FingerAlternation
+        global_y_min, global_y_max = 0.0, 1.0
+        if 'FingerAlternation' in ex_id:
+            all_vals = np.concatenate(signals)
+            pad = (np.max(all_vals) - np.min(all_vals)) * 0.1
+            global_y_min = np.min(all_vals) - pad
+            global_y_max = np.max(all_vals) + pad
 
-        # layout
-        ax.set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=14, pad=15)
-        ax.set_xlabel('Time [s]', fontsize=12)
-        if 'ProSup' in ex_id:
-            ax.set_ylabel('Rotation Angle [°]', fontsize=12)
-        else:
-            ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
-        ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+        # collectors for the legend
+        line_handles = []
+        line_labels = []
 
-        # horizontal legend above the chart
-        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=True, fontsize=10)
+        for i, (curr_ax, sig, feat) in enumerate(zip(axes, signals, feature_list)):
+            color = base_colors[i % len(base_colors)]
+            dark_color = adjust_lightness(color, amount=0.8)    # 20% darker
+            light_color = adjust_lightness(color, amount=1.6)   # 60% lighter
+
+            plot_sig = np.array(sig)
+            if 'ProSup' in ex_id:
+                plot_sig = plot_sig - np.mean(plot_sig)
+
+            label_name = alt_labels[i] if len(signals) > 1 else ex_id
+
+            # plot the main signal
+            line_obj, = curr_ax.plot(t_axis, plot_sig, color=color, linewidth=1.5, alpha=0.7, label=label_name, zorder=2)
+            line_handles.append(line_obj)
+            line_labels.append(label_name)
+
+            # plot valid peaks (dark up-triangle)
+            peak_indices = feat.get('valid_peaks_idx', [])
+            if len(peak_indices) > 0:
+                curr_ax.scatter(t_axis[peak_indices], plot_sig[peak_indices],
+                                marker='^', s=80, facecolor=dark_color, edgecolor='black', linewidth=0.8, zorder=3)
+
+            # plot valid valleys (light down-triangle)
+            valley_indices = feat.get('valid_valleys_idx', [])
+            if len(valley_indices) > 0:
+                curr_ax.scatter(t_axis[valley_indices], plot_sig[valley_indices],
+                                marker='v', s=80, facecolor=light_color, edgecolor='black', linewidth=0.8, zorder=3)
+
+            # exercise specific y-axis formatting
+            if 'FingerAlternation' in ex_id:
+                curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
+                curr_ax.set_ylim(global_y_min, global_y_max)
+            elif 'ProSup' in ex_id:
+                curr_ax.set_ylabel('Rotation Angle [°] (Centered)', fontsize=12)
+                curr_ax.set_ylim(-155, 155)
+                pro_sup_cfg = config.get('pro_sup', {})
+                peak_cfg = pro_sup_cfg.get('peak_cfg', {})
+                ticks: int = int(peak_cfg.get('min_prominence', 30))
+                curr_ax.set_yticks(np.arange(-150, 151, ticks))
+            else:
+                # 'FingerTapping' and 'HandOpening'
+                curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
+                curr_ax.set_ylim(-0.05, 1.05)
+                curr_ax.set_yticks(np.arange(0.0, 1.1, 0.2))
+
+            curr_ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
+            curr_ax.spines['top'].set_visible(False)
+            curr_ax.spines['right'].set_visible(False)
+
+        # custom legend markers for peaks and valleys
+        custom_peak = Line2D([0], [0], marker='^', color='w', markerfacecolor='none',
+                             markeredgecolor='black', markersize=8,)
+        custom_valley = Line2D([0], [0], marker='v', color='w', markerfacecolor='none',
+                               markeredgecolor='black', markersize=8,)
+
+        # append to bottom of the line legend list
+        line_handles.extend([custom_peak, custom_valley])
+        line_labels.extend(['Peaks', 'Valleys'])
+
+        # place legend top-most axis
+        axes[0].legend(line_handles, line_labels, loc='upper left', bbox_to_anchor=(1.02, 0.5),
+                       ncol=1, frameon=True, fontsize=10)
+
+        # title on top axis, x-label on bottom axis
+        # layout and labels
+        axes[0].set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=14, pad=15)
+        axes[-1].set_xlabel('Time [s]', fontsize=12)
+
+        # add annotation for extracted metrics of the primary signal
+        prim_feat = feature_list[0]
+        metrics_text = (f"Reps: {prim_feat.get('repetition_num', 0):.1f} | "
+                        f"Freq: {prim_feat.get('repetition_freq', 0):.2f} Hz\n"
+                        f"Mean Amp: {prim_feat.get('amplitude_mean', 0):.2f} | "
+                        f"Mean Period: {prim_feat.get('period_mean', 0):.2f}s")
+
+        # position text above the legend
+        axes[0].text(1.02, 0.96, metrics_text, transform=axes[0].transAxes,
+                     verticalalignment='top', horizontalalignment='left',
+                     bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9),
+                     fontsize=10, zorder=4)
 
         plt.tight_layout()
 
@@ -534,7 +844,7 @@ class Visualizer:
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
 
-        plt.close()
+        plt.close(fig)
 
     # ============================================================================= #
     #                            4) KINEMATICS QUALITY CHECK                        #
@@ -556,6 +866,22 @@ class Visualizer:
         Returns:
             None
         """
+
+        # helper to remove global translation by anchoring the wrist to (0,0,0)
+        def _center_hand_on_wrist(hand_dict: dict, wrist_key: str) -> None:
+            if wrist_key not in hand_dict:
+                return
+
+            # extract the wrist trajectory as numpy arrays
+            wrist_x = np.array(hand_dict[wrist_key][0])
+            wrist_y = np.array(hand_dict[wrist_key][1])
+            wrist_z = np.array(hand_dict[wrist_key][2])
+
+            # subtract the wrist position from every joint in the hand
+            for joint, data in hand_dict.items():
+                hand_dict[joint][0] = (np.array(data[0]) - wrist_x).tolist()
+                hand_dict[joint][1] = (np.array(data[1]) - wrist_y).tolist()
+                hand_dict[joint][2] = (np.array(data[2]) - wrist_z).tolist()
 
         # check whether video already exists
         f_name = f'{p_id}-{visit_id}_{ex_id}_QC.mp4'
@@ -604,14 +930,8 @@ class Visualizer:
                     if data:
                         dashboard_data['pose'][joint] = data
 
-        # extract rotation matrices for the active wrist
-        # rot_matrices = {}
-        # if 'ProSup' in ex_id:
-        #     active_side_idx = '1' if side_focus == 'L' else '2'
-        #     rot_col = f'wrist{active_side_idx}_rot'
-        #     if rot_col in df.columns:
-        #         stacked_rots = np.vstack(df[rot_col].to_numpy()).reshape(-1, 3, 3)
-        #         rot_matrices['active'] = stacked_rots
+        _center_hand_on_wrist(dashboard_data['left_hand'], 'wrist1')
+        _center_hand_on_wrist(dashboard_data['right_hand'], 'wrist2')
 
         num_metrics = len(metrics_dict)
 

@@ -53,7 +53,7 @@ def run_kinematics_extractor(save_plots: bool = True):
                 if 'FingerTapping' in ex_key:
                     metrics = ex_eval.analyze_finger_tapping(exercise, p.pid, active_hand_size, save_plots)
                 elif 'FingerAlternation' in ex_key:
-                    metrics = ex_eval.analyze_finger_alternation(exercise, active_hand_size, save_plots)
+                    metrics = ex_eval.analyze_finger_alternation(exercise, p.pid, active_hand_size, save_plots)
                 elif 'HandOpening' in ex_key:
                     metrics = ex_eval.analyze_hand_opening(exercise, p.pid, active_hand_size, save_plots)
                 elif 'ProSup' in ex_key:

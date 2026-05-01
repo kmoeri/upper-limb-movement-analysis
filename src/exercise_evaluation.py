@@ -5,7 +5,7 @@ import pydoc
 import numpy as np
 import editdistance
 import pandas as pd
-from scipy.spatial.transform import Rotation
+from scipy.ndimage import median_filter
 
 # modules
 from src.config import config
@@ -35,7 +35,8 @@ class ExerciseEvaluator:
                                'distance_factor': 0.35}
 
     def _extract_distance_based_kinematics(self, df: pd.DataFrame, static_hand_size: float, ref_landmark_name: str,
-                                           target_landmark_names: list, custom_peak_cfg: dict = None) -> dict:
+                                           target_landmark_names: list, custom_peak_cfg: dict = None,
+                                           min_offset: float = 0.0, max_offset: float = 0.0) -> dict:
         """
         Helper function to calculate normalized Euclidean distance and extract kinematic
         peaks for arbitrary combination of reference landmark and target landmarks combinations.
@@ -47,6 +48,8 @@ class ExerciseEvaluator:
             ref_landmark_name (str): The reference point (e.g., 'wrist1', 'cmc1', 'ftip1').
             target_landmark_names (list): The moving points (e.g., ['ftip2', 'ftip3']).
             custom_peak_cfg (dict): A dictionary with customized peak detection parameters.
+            min_offset (float, optional): The minimal distance offset of an anatomically unreachable distance.
+            max_offset (float, optional): The maximal distance offset of an anatomically unreachable distance.
 
         Returns:
             dict: Nested dictionary containing normalized distances and feature parameters.
@@ -79,19 +82,11 @@ class ExerciseEvaluator:
             # distance used for final distance measurement
             norm_dist_arr = raw_dist / max(static_hand_size, 1e-8)
 
+            # apply anatomical offset correction
+            norm_dist_arr = np.clip((norm_dist_arr - min_offset) / (max_offset - min_offset), 0.0, 1.0)
+
             # peak extraction
             feature_dict = self.kf.calc_kinematic_parameters(norm_dist_arr, current_cfg)
-
-            # overwrite amplitude features using the static normalized array
-            valid_peaks = feature_dict.get('valid_peaks_idx', [])
-            if len(valid_peaks) > 0:
-                peak_amplitudes = norm_dist_arr[valid_peaks]
-
-                feature_dict['amplitude_mean'] = float(np.mean(peak_amplitudes))
-                feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amplitudes, 90))
-
-                amp_mean = feature_dict['amplitude_mean']
-                feature_dict['amplitude_cov'] = float((np.std(peak_amplitudes) / amp_mean) * 100) if amp_mean > 0 else 0.0
 
             finger_key = f'{ref_landmark_name}-{target_name}'
             performance_dict[finger_key] = {'normalized_distance': norm_dist_arr,
@@ -122,15 +117,17 @@ class ExerciseEvaluator:
             print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
             return {}
 
-        # dynamic palm scaling
-        dynamic_palm_arr: np.ndarray = np.ones(len(df))
+        # offset adjustment: reference point is anatomically unreachable
+        min_offset: float = config['index_ftap'].get('dist_offset_min', 0.18)
+        max_offset: float = config['index_ftap'].get('dist_offset_max', 0.82)
 
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(df,
                                                                          p_hand_size,       # for feature scaling
                                                                          anchor,
                                                                          [target],
-                                                                         ex_peak_cfg)
+                                                                         ex_peak_cfg,
+                                                                         min_offset, max_offset)
 
         # handle missing key pair
         if pair_key not in active_dist_dict:
@@ -175,7 +172,9 @@ class ExerciseEvaluator:
         passive_kinematics: dict = self._extract_distance_based_kinematics(df,
                                                                            p_hand_size,
                                                                            wrist_key,
-                                                                           passive_fingers)
+                                                                           passive_fingers,
+                                                                           ex_peak_cfg,
+                                                                           min_offset, max_offset)
 
         # calculate the isolation variances
         isolation_variances: list = []
@@ -241,7 +240,7 @@ class ExerciseEvaluator:
 
         return results
 
-    def analyze_finger_alternation(self, exercise: Exercise, p_hand_size: float, save_plots: bool = False):
+    def analyze_finger_alternation(self, exercise: Exercise, p_id: str, p_hand_size: float, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
         # get current active side
@@ -266,12 +265,17 @@ class ExerciseEvaluator:
         # dynamic palm scaling
         dynamic_palm_arr: np.ndarray = np.ones(len(df))
 
+        # offset adjustment: reference point is anatomically unreachable -> offset of ~0.0
+        min_offset: float = config['ftap_alter'].get('dist_offset_min', 0.00)
+        max_offset: float = config['ftap_alter'].get('dist_offset_max', 1.00)
+
         # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
         active_dist_dict: dict = self._extract_distance_based_kinematics(df,
                                                                          p_hand_size,
                                                                          thumb,
                                                                          finger_names,
-                                                                         ex_peak_cfg)
+                                                                         ex_peak_cfg,
+                                                                         min_offset, max_offset)
 
         # 1.2) correctness of the tapping order (extract tapping sequence and score with Levenshtein Distance)
 
@@ -292,11 +296,11 @@ class ExerciseEvaluator:
         if pat_len == 0:
             return {'errors': 0, 'accuracy': 0.0, 'intended_target_len': 0}
 
-        # target tapping sequence - single full repetition
-        target_sequence = [2, 3, 4, 5, 4, 3]
-
-        # create an oversized sequence (30 repetitions of the sequence)
-        oversized_target = target_sequence * 30
+        # template of possible target tapping sequences - one full repetition
+        target_templates = [
+            [2,3,4,5],              # resetting
+            [2, 3, 4, 5, 4, 3]      # looping
+        ]
 
         # initialize rating variables
         best_accuracy = -1.0
@@ -307,24 +311,28 @@ class ExerciseEvaluator:
         min_search_len = max(1, pat_len // 2)   # x0.5 the taps if every finger was double-tapped
         max_search_len = int(pat_len * 1.5)     # x1.5 the taps if there are many skipped fingers
 
-        # check every possible target length from the min to max window
-        for test_len in range(min_search_len, max_search_len + 1):
+        for template in target_templates:
+            # create an oversized sequence (30 repetitions of the sequence)
+            oversized_target = template * 30
 
-            # slice the perfect sequence to this test length
-            test_target = oversized_target[:test_len]
+            # check every possible target length from the min to max window
+            for test_len in range(min_search_len, max_search_len + 1):
 
-            # calculate the Levenshtein distance errors
-            errors = editdistance.eval(test_target, tapping_sequence_digit_lst)
+                # slice the perfect sequence to this test length
+                test_target = oversized_target[:test_len]
 
-            # normalize to an accuracy percentage
-            max_possible_errors = max(test_len, pat_len)
-            accuracy = ((max_possible_errors - errors) / max_possible_errors) * 100
+                # calculate the Levenshtein distance errors
+                errors = editdistance.eval(test_target, tapping_sequence_digit_lst)
 
-            # keep the window that aligns the best and the corresponding accuracy and errors
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
-                best_errors = errors
-                best_target_len = test_len
+                # normalize to an accuracy percentage
+                max_possible_errors = max(test_len, pat_len)
+                accuracy = ((max_possible_errors - errors) / max_possible_errors) * 100
+
+                # keep the window that aligns the best and the corresponding accuracy and errors
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    best_errors = errors
+                    best_target_len = test_len
 
         tapping_results: dict = {
             'errors': best_errors,
@@ -380,10 +388,13 @@ class ExerciseEvaluator:
         # extract all four time series (from each finger pair)
         alt_tap_y: list = []
         alt_tap_x: list = []
+        alt_tap_features: list = []
+
         for fn in finger_names:
             p_feat = active_dist_dict[f'{thumb}-{fn}']['features']
             alt_tap_y.append(p_feat.get('signal_original', []))
             alt_tap_x.append(p_feat.get('time_axis', []))
+            alt_tap_features.append(p_feat)
 
         # 2) extract general metrics (e.g., task impairment by spectrogram)
 
@@ -424,6 +435,16 @@ class ExerciseEvaluator:
             # isolation (variance of other fingers)
             'alt_tap_isolation': isolation_score,
         }
+
+        # plot visualization
+        if save_plots and performance_features['extraction_status'] == 'success':
+
+            self.viz.viz_repetitive_binary_exercises(time_axis=alt_tap_x,
+                                                     signal=alt_tap_y,
+                                                     features=alt_tap_features,
+                                                     p_id=p_id,
+                                                     visit_id=exercise.visit_id,
+                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
 
@@ -475,6 +496,12 @@ class ExerciseEvaluator:
             # clipping the KCR to the range 0.0-1.0 prevents values > 1.0 due to noise or hyperextension
             kcr_arr = np.clip(dist_ftip_wrist / np.clip(sum_segments, 1e-8, None), 0.0, 1.0)
 
+            # offset adjustment: reference point is anatomically unreachable -> offset of ~0.35
+            min_offset: float = config['open_close'].get('dist_offset_min', 0.35)
+            max_offset: float = config['open_close'].get('dist_offset_max', 1.00)
+
+            kcr_arr = np.clip((kcr_arr - min_offset) / (max_offset - min_offset), 0.0, 1.0)     # rescale
+
             # calculate the angle composite score
             vec_mw: np.ndarray = mcp_arr - wrist_arr
             vec_pm: np.ndarray = pip_arr - mcp_arr
@@ -495,14 +522,6 @@ class ExerciseEvaluator:
             # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
             feature_dict: dict = self.kf.calc_kinematic_parameters(kcr_arr, ex_peak_cfg)
 
-            valid_peaks = feature_dict.get('valid_peaks_idx', [])
-            if len(valid_peaks) > 0:
-                peak_amps = kcr_arr[valid_peaks]
-                feature_dict['amplitude_mean'] = float(np.mean(peak_amps))
-                feature_dict['amplitude_pct_90'] = float(np.percentile(peak_amps, 90))
-                amp_mean = feature_dict['amplitude_mean']
-                feature_dict['amplitude_cov'] = float((np.std(peak_amps) / amp_mean) * 100) if amp_mean > 0 else 0.0
-
             finger_key = f'{wrist_name}-ftip{active_side_idx}{digit}'
             active_dist_dict[finger_key] = {
                 'normalized_distance': kcr_arr,
@@ -522,13 +541,7 @@ class ExerciseEvaluator:
 
         # re-calculate amplitudes for the average signal
         avg_valid_peaks = avg_performance_features.get('valid_peaks_idx', [])
-        if len(avg_valid_peaks) > 0:
-            avg_peak_amps = avg_kcr_arr[avg_valid_peaks]
-            avg_performance_features['amplitude_mean'] = float(np.mean(avg_peak_amps))
-            avg_performance_features['amplitude_pct_90'] = float(np.percentile(avg_peak_amps, 90))
-            avg_amp_mean = avg_performance_features['amplitude_mean']
-            avg_performance_features['amplitude_cov'] = float(
-                (np.std(avg_peak_amps) / avg_amp_mean) * 100) if avg_amp_mean > 0 else 0.0
+        avg_valid_valleys = avg_performance_features.get('valid_valleys_idx', [])
 
         # 1.3) Correctness of Opening & Closing (Completeness)
         # extension score (hand open) - graded average signal peaks
@@ -539,7 +552,6 @@ class ExerciseEvaluator:
             extension_score: float = 0.0
 
         # flexion score (hand closed) - graded average signal valleys
-        avg_valid_valleys = avg_performance_features.get('valid_valleys_idx', [])
         if len(avg_valid_valleys) > 0:
             min_dist_kcr: float = config['open_close'].get('fist_min_dist', 0.25)
             kcr_mapped: np.ndarray = np.clip(
@@ -583,22 +595,6 @@ class ExerciseEvaluator:
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
         # 5) Create result dictionary
-
-        # calculate the average normalized distance across all four fingers
-        avg_kcr_arr = np.mean(all_kcr_arrays, axis=0)
-
-        # extract features on the averaged signal
-        avg_performance_features = self.kf.calc_kinematic_parameters(avg_kcr_arr, ex_peak_cfg)
-
-        # recalculate amplitudes for the average signal
-        avg_valid_peaks = avg_performance_features.get('valid_peaks_idx', [])
-        if len(avg_valid_peaks) > 0:
-            avg_peak_amps = avg_kcr_arr[avg_valid_peaks]
-            avg_performance_features['amplitude_mean'] = float(np.mean(avg_peak_amps))
-            avg_performance_features['amplitude_pct_90'] = float(np.percentile(avg_peak_amps, 90))
-            avg_amp_mean = avg_performance_features['amplitude_mean']
-            avg_performance_features['amplitude_cov'] = float(
-                (np.std(avg_peak_amps) / avg_amp_mean) * 100) if avg_amp_mean > 0 else 0.0
 
         # flatten the performance metrics using the average hand movement
         performance_features = avg_performance_features
@@ -667,32 +663,18 @@ class ExerciseEvaluator:
 
         # 1.2) correctness of the rotation (completeness of movement)
 
-        # get all peak and valley amplitudes
-        peaks = active_dist_dict['valid_peaks_idx']
-        valleys = active_dist_dict['valid_valleys_idx']
-
         # get peak and valley values of the pronation-supination movement
-        pro_valley_vals = euler_y[valleys]
-        sup_peak_vals = euler_y[peaks]
+        tot_active_rom = active_dist_dict.get('raw_amplitudes', np.array([]))
 
         # get config thresholds for valid opening and closing
-        pro_thresh: float = config['pro_sup'].get('pronation_rom', 75.0)
-        sup_thresh: float = config['pro_sup'].get('supination_rom', 80.0)
+        tot_active_rom_thresh: float = config['pro_sup'].get('total_active_rom', 140.0)
 
         # calculate pronation and supination scores
-        pro_score = (np.sum(np.abs(pro_valley_vals) > pro_thresh) / len(pro_valley_vals) * 100) if len(pro_valley_vals) > 0 else 0.0
-        sup_score = (np.sum(sup_peak_vals > sup_thresh) / len(sup_peak_vals) * 100) if len(sup_peak_vals) > 0 else 0.0
+        active_rom_score = (np.sum(tot_active_rom > tot_active_rom_thresh) / len(tot_active_rom) * 100) if len(tot_active_rom) > 0 else 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between rotations), stability (out-of-plane compensation)
-
-        # 1.3.1) calculate the tapping rhythm with CoV
-        if len(valleys) > 1:
-            rotation_diff: np.ndarray = np.diff(valleys)
-            rotation_mean: float = float(np.mean(rotation_diff))
-            rotation_std: float = float(np.std(rotation_diff))
-            rotation_cov: float = float((rotation_std / rotation_mean) * 100) if rotation_mean > 0 else 0.0
-        else:
-            rotation_cov: float = 0.0
+        # 1.3.1) calculate the rotation rhythm with CoV
+        rotation_cov: float = active_dist_dict.get('period_cov', 0.0)
 
         # 1.3.2) calculate the rotation stability - the larger the values of the other euler angles, the lower the score
         x_stability_score: float = float(np.std(euler_x))
@@ -733,8 +715,7 @@ class ExerciseEvaluator:
             'pro_sup_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
             'pro_sup_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
             # correctness of pronation & supination(completeness of movement)
-            'pro_sup_pronation_score': pro_score,
-            'pro_sup_supination_score': sup_score,
+            'pro_sup_active_rom_score': active_rom_score,
             # rhythm with CoV (period time between rotations)
             'pro_sup_rot_cov': rotation_cov,
             # rotation stability
