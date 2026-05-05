@@ -985,7 +985,7 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) 
 
     Args:
         feature_list_of_dicts: List of dicts containing features from a specific trial.
-        out_dir: Directory where 'extracted_movement_features.csv' is stored.
+        out_dir: Directory where 'all_extracted_features.csv' is stored.
 
     Returns:
         None
@@ -996,7 +996,7 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) 
         return
 
     # csv main file
-    out_path: str = os.path.join(out_dir, 'extracted_movement_features.csv')
+    out_path: str = os.path.join(out_dir, 'all_extracted_features.csv')
 
     # load metric data into a dataframe
     data_df: pd.DataFrame = pd.DataFrame(feature_list_of_dicts)

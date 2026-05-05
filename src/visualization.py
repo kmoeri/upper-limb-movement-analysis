@@ -1248,3 +1248,24 @@ class Visualizer:
         ani.save(out_path, writer='ffmpeg', fps=(self.fps / skip_frames), bitrate=2000)
 
         plt.close(fig)
+
+    # ============================================================================= #
+    #                           5) Classification / Regression                      #
+    # ============================================================================= #
+    def corr_matrix_heatmap(self, matrix_data: pd.DataFrame, mask: np.ndarray, ex_name: str, labels: list[str]) -> None:
+
+        plt.figure(figsize=(12, 10))
+
+        sns.heatmap(matrix_data, mask=mask, cmap='coolwarm', vmin=0, vmax=1, xticklabels=labels, yticklabels=labels,
+                    annot=False, square=True, linewidths=.5, fmt='.2f')
+
+        plt.title(f'Spearman Correlation Matrix - {ex_name}', fontsize=16)
+        plt.tight_layout()
+
+        suffix = '.png'
+        f_name: str = ex_name + '_feature_heatmap' + suffix
+        f_path: str = os.path.join(self.classification_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600)
+
+        plt.close()

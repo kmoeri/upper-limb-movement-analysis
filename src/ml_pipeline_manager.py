@@ -47,13 +47,13 @@ class EnsembleManager:
 
             # filter data for the current exercise
             df_ex: pd.DataFrame = df_train[df_train['ex_name'] == ex_name].dropna(subset=[target_col])
-
+            df_ex = df_ex.dropna(axis=1, how='all')
             if df_ex.empty:
                 print(f'Warning: No training data found for exercise: {ex_name}. Skipping.')
                 continue
 
             # get feature matrix, target vector, and participant groups
-            X: pd.DataFrame = df_ex[feature_cols]
+            X: pd.DataFrame = df_ex[[col for col in feature_cols if col in df_ex.columns]]
             y: pd.Series = df_ex[target_col]
             groups: pd.Series = df_ex['p_ID']   # required for GroupKFold
 
