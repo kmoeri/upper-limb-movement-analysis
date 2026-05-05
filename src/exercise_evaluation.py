@@ -3,9 +3,8 @@ import pydoc
 
 # libraries
 import numpy as np
-import editdistance
 import pandas as pd
-from scipy.ndimage import median_filter
+from scipy.spatial import ConvexHull, QhullError
 
 # modules
 from src.config import config
@@ -83,7 +82,7 @@ class ExerciseEvaluator:
             norm_dist_arr = raw_dist / max(static_hand_size, 1e-8)
 
             # apply anatomical offset correction
-            norm_dist_arr = np.clip((norm_dist_arr - min_offset) / (max_offset - min_offset), 0.0, 1.0)
+            norm_dist_arr = np.clip((norm_dist_arr - min_offset) / max((max_offset - min_offset), 1e-8), 0.0, 1.0)
 
             # peak extraction
             feature_dict = self.kf.calc_kinematic_parameters(norm_dist_arr, current_cfg)
@@ -262,14 +261,11 @@ class ExerciseEvaluator:
             print(f'Error: Clean data not found for {exercise.exercise_id}. Skipping.')
             return {}
 
-        # dynamic palm scaling
-        dynamic_palm_arr: np.ndarray = np.ones(len(df))
-
         # offset adjustment: reference point is anatomically unreachable -> offset of ~0.0
         min_offset: float = config['ftap_alter'].get('dist_offset_min', 0.00)
         max_offset: float = config['ftap_alter'].get('dist_offset_max', 1.00)
 
-        # 1.1) performance: extract amplitude, period time, velocity, etc. (using peak detection)
+        # get dictionary with time series of finger pairs
         active_dist_dict: dict = self._extract_distance_based_kinematics(df,
                                                                          p_hand_size,
                                                                          thumb,
@@ -277,113 +273,156 @@ class ExerciseEvaluator:
                                                                          ex_peak_cfg,
                                                                          min_offset, max_offset)
 
-        # 1.2) correctness of the tapping order (extract tapping sequence and score with Levenshtein Distance)
-
-        # extract tapping idc list for each finger digit
-        finger_tapping_idc_lst: list = []
-        for finger_key, val in active_dist_dict.items():
-            finger_tapping_idc_lst += [(int(finger_key[-1]), x) for x in val['features']['valid_valleys_idx']]
-
-        # sort the indices of each finger by the second tuple element (index number): [(1, '153'), (2, '153'), ...]
-        finger_tapping_idc_lst = sorted(finger_tapping_idc_lst, key=lambda x: x[1])
-
-        # extract the finger digit sequence
-        tapping_sequence_digit_lst: list = [x[0] for x in finger_tapping_idc_lst]
-
-        pat_len = len(tapping_sequence_digit_lst)
-
-        # safety: for zero movement
-        if pat_len == 0:
-            return {'errors': 0, 'accuracy': 0.0, 'intended_target_len': 0}
-
-        # template of possible target tapping sequences - one full repetition
-        target_templates = [
-            [2,3,4,5],              # resetting
-            [2, 3, 4, 5, 4, 3]      # looping
-        ]
-
-        # initialize rating variables
-        best_accuracy = -1.0
-        best_errors = 0
-        best_target_len = 0
-
-        # define a search window for the estimated taps intended
-        min_search_len = max(1, pat_len // 2)   # x0.5 the taps if every finger was double-tapped
-        max_search_len = int(pat_len * 1.5)     # x1.5 the taps if there are many skipped fingers
-
-        for template in target_templates:
-            # create an oversized sequence (30 repetitions of the sequence)
-            oversized_target = template * 30
-
-            # check every possible target length from the min to max window
-            for test_len in range(min_search_len, max_search_len + 1):
-
-                # slice the perfect sequence to this test length
-                test_target = oversized_target[:test_len]
-
-                # calculate the Levenshtein distance errors
-                errors = editdistance.eval(test_target, tapping_sequence_digit_lst)
-
-                # normalize to an accuracy percentage
-                max_possible_errors = max(test_len, pat_len)
-                accuracy = ((max_possible_errors - errors) / max_possible_errors) * 100
-
-                # keep the window that aligns the best and the corresponding accuracy and errors
-                if accuracy > best_accuracy:
-                    best_accuracy = accuracy
-                    best_errors = errors
-                    best_target_len = test_len
-
-        tapping_results: dict = {
-            'errors': best_errors,
-            'accuracy': round(best_accuracy, 2),
-            'intended_target_len': best_target_len
+        # create dictionary holding each time series array
+        tap_distance_data_dict: dict = {
+            'thumb-index': active_dist_dict[f'{thumb}-{finger_names[0]}']['normalized_distance'],
+            'thumb-middle': active_dist_dict[f'{thumb}-{finger_names[1]}']['normalized_distance'],
+            'thumb-ring': active_dist_dict[f'{thumb}-{finger_names[2]}']['normalized_distance'],
+            'thumb-pinky': active_dist_dict[f'{thumb}-{finger_names[3]}']['normalized_distance']
         }
 
-        # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
+        # 1.2) Implement inter-digit synergy using correlation matrix
 
-        # extract the idc of the tapping sequence
-        tapping_sequence_idc_lst: list = [x[1] for x in finger_tapping_idc_lst]
+        # stack all four Euclidean distance signals in a 2D matrix of shape (4, frames)
+        signal_mat = np.vstack(list(tap_distance_data_dict.values()))
 
-        # calculate the tapping rhythm with CoV
-        if len(tapping_sequence_idc_lst) > 1:
-            tapping_diff: np.ndarray = np.diff(tapping_sequence_idc_lst)
+        # calculate 4x4 correlation matrix
+        corr_mat = np.corrcoef(signal_mat)
+
+        # extract upper triangle (excluding the diagonal)
+        upper_tri_idx = np.triu_indices_from(corr_mat, k=1)
+
+        # calculate the mean of the correlations
+        synergy_score: float = float(np.nanmean(corr_mat[upper_tri_idx]))
+        if np.isnan(synergy_score):
+            synergy_score: float = 0
+
+        # 1.3) operational volume calculation (convex hull)
+        wrist_name: str = f'wrist{active_side_idx}'
+        hull_landmarks: list[str] = [wrist_name, thumb] + finger_names
+
+        # vectorized extraction of 3D coordinates for all landmarks
+        pts_x: np.ndarray = df[[f'{lm}_x' for lm in hull_landmarks]].to_numpy()
+        pts_y: np.ndarray = df[[f'{lm}_y' for lm in hull_landmarks]].to_numpy()
+        pts_z: np.ndarray = df[[f'{lm}_z' for lm in hull_landmarks]].to_numpy()
+
+        volumes: list = []
+
+        # calculate the convex hull volume frame-by-frame
+        for i in range(len(df)):
+
+            # stack coordinates to shape (6, 3) for current frame
+            frame_points = np.column_stack([pts_x[i], pts_y[i], pts_z[i]])
+
+            try:
+                vol = ConvexHull(frame_points).volume
+                volumes.append(vol)
+            except QhullError:
+                # flat hands will lead to collinear points
+                volumes.append(0.0)
+
+        # normalize the average volume by the cube of the anatomical hand size
+        mean_volume: float = float(np.mean(volumes)) / max((p_hand_size ** 3), 1e-8)
+
+        # 1.4) event detection using hysteresis
+
+        # get defined thresholds and cutoffs
+        tap_thresh: float = config['ftap_alter'].get('tap_threshold', 0.25)
+        rel_thresh: float = config['ftap_alter'].get('release_threshold', 0.40)
+        str_cut: float = config['ftap_alter'].get('strict_cutoff', 0.10)
+
+        # run hysteresis algorithm
+        resolved_taps = self.kf.extract_alt_tap_event_hysteresis(tap_distance_data_dict, tap_thresh, rel_thresh, str_cut)
+
+        # separate 'strict' taps from 'near_miss'
+        strict_taps: list = [tap for tap in resolved_taps if tap['type'] == 'strict']
+        near_misses: list = [tap for tap in resolved_taps if tap['type'] == 'near_miss']
+
+        # 1.5) task-dependent features
+        levenshtein_acc: float = 0.0
+        levenshtein_err: float = 0.0
+        rhythm_cov: float = 0.0
+        contrib_ratio: float = 0.0
+        dwell_time: float = 0.0
+        smoothness: float = 0.0
+
+        if len(resolved_taps) >= 2:
+
+            # get sequence accuracy using the levenshtein distance
+            levenshtein_acc, levenshtein_err, _ = self.kf.calc_levenshtein_accuracy(resolved_taps)
+
+            # get the rhythm using CoV
+            tap_indices: list = [tap['min_idx'] for tap in resolved_taps]
+            tapping_diff: np.ndarray = np.diff(tap_indices)
             tapping_mean: float = float(np.mean(tapping_diff))
-            tapping_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
-        else:
-            tapping_mean: float = 0.0
-            tapping_cov: float = 0.0
+            rhythm_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
 
-        # calculate the isolation score
-        isolation_variances = []
+            # 1.5.1) contribution ratio (thumb vs. fingertip) and dwell time (time spent in window)
 
-        # calculate a dynamic window ca. 33% of the mean tapping period (tapping_mean / 3).
-        if 'tapping_mean' in locals() and tapping_mean > 0:
-            half_window_frames = int(tapping_mean / 6.0)        # backward and forward window
-            half_window_frames = max(half_window_frames, 2)     # limit minimum window size
-        else:
-            # use 50ms half-window if there is only one tap (no mean period)
-            half_window_frames = int(self.fps * 0.05)
+            # extract 3D coordinate arrays to calculate the speed
+            wrist_arr: np.ndarray = df[[f'{wrist_name}_x', f'{wrist_name}_y', f'{wrist_name}_z']].to_numpy()
+            thumb_arr: np.ndarray = df[[f'{thumb}_x', f'{thumb}_y', f'{thumb}_z']].to_numpy()
 
-        for active_finger_id, tap_idx in finger_tapping_idc_lst:
+            finger_arrs = {}
+            for fn in finger_names:
+                finger_arrs[fn] = df[[f'{fn}_x', f'{fn}_y', f'{fn}_z']].to_numpy()
 
-            # find the dictionary keys for the 3 fingers that are not supposed to be moving right now
-            passive_finger_keys = [key for key in active_dist_dict.keys() if str(active_finger_id) not in key]
+            contrib_ratios: list = []
+            dwell_times: list = []
+            sparc_scores: list = []
+            for tap in resolved_taps:
+                s_idx = tap['start_idx']
+                m_idx = tap['min_idx']
+                e_idx = tap['end_idx']
 
-            for finger_key in passive_finger_keys:
-                dist_array = active_dist_dict[finger_key]['normalized_distance']
+                # calculate dwell time
+                dwell_sec = float(e_idx - s_idx) / self.fps
+                dwell_times.append(dwell_sec)
 
-                # array sliced dynamically based on participant-specific tapping speed
-                start_idx = max(0, tap_idx - half_window_frames)
-                end_idx = min(len(dist_array), tap_idx + half_window_frames)
+                # calculate contribution ratio
+                target_fn = tap['finger_key'].split('-')[1]
+                target_arr = finger_arrs[target_fn]
 
-                if start_idx < end_idx:
-                    snippet = dist_array[start_idx:end_idx]
-                    # calculate the movement variance of each 'resting' finger
-                    isolation_variances.append(np.var(snippet))
+                # slice the arrays to the exact window of this specific tap
+                w_window = wrist_arr[s_idx:e_idx]
+                t_window = thumb_arr[s_idx:e_idx]
+                f_window = target_arr[target_fn]
 
-        # isolation score: The average variance of all non-active fingers across all taps (lower: better isolation)
-        isolation_score: float = float(np.mean(isolation_variances)) if isolation_variances else 0.0
+                # anchor thumb and finger coordinates to the wrist
+                t_rel = t_window - w_window
+                f_rel = f_window - w_window
+
+                if len(t_rel) > 1:
+                    # calculate the cumulative 3D path length by summing the distance between consecutive frames
+                    t_path = float(np.sum(np.linalg.norm(np.diff(t_rel, axis=0), axis=1)))
+                    f_path = float(np.sum(np.linalg.norm(np.diff(f_rel, axis=0), axis=1)))
+
+                    total_path: float = t_path + f_path
+                    if total_path > 0.0:
+                        # 1.0 = thumb did all the moving; 0.0 = finger did all the moving
+                        contrib_ratios.append(t_path / total_path)
+                    else:
+                        contrib_ratios.append(0.5)
+                else:
+                    contrib_ratios.append(0.5)
+
+                # 1.5.2) smoothness evaluation using SPARC
+                approach_signal = tap_distance_data_dict[tap['finger_key']][s_idx:m_idx]
+
+                if len(approach_signal) >= 5:
+                    # calculate velocity (first derivative of distance)
+                    approach_velocity = np.gradient(approach_signal, 1.0 / self.fps)
+
+                    # call SPARC function
+                    sparc_val: float = self.kf.calc_sparc(approach_velocity)
+                    sparc_scores.append(sparc_val)
+
+            # average features across all valid taps
+            contrib_ratio = float(np.mean(contrib_ratios)) if contrib_ratios else 0.5
+            dwell_time = float(np.mean(dwell_times)) if dwell_times else 0.0
+
+            # SPARC score is always negative (e.g., -1.5 is smoother than -4.2)
+            smoothness = float(np.mean(sparc_scores)) if sparc_scores else 0.0
 
         # extract all four time series (from each finger pair)
         alt_tap_y: list = []
@@ -404,40 +443,35 @@ class ExerciseEvaluator:
 
         # 5) Create result dictionary
 
-        # flatten the performance metrics of the active finger
-        performance_features = active_dist_dict[f'{thumb}-{finger_names[0]}']['features']
-
         # add exercise specific prefix-key 'alt_tap'
         results = {
             # time series
             'alt_tap_time_series_y': alt_tap_y,
             'alt_tap_time_series_x': alt_tap_x,
-            # general kinematic features
-            'alt_tap_rep_num': performance_features.get('repetition_num', 0.0),
-            'alt_tap_rep_freq': performance_features.get('repetition_freq', 0.0),
-            'alt_tap_amp_mean': performance_features.get('amplitude_mean', 0.0),
-            'alt_tap_amp_pct_90': performance_features.get('amplitude_pct_90', 0.0),
-            'alt_tap_amp_cov': performance_features.get('amplitude_cov', 0.0),
-            'alt_tap_period_mean': performance_features.get('period_mean', 0.0),
-            'alt_tap_period_pct_90': performance_features.get('period_pct_90', 0.0),
-            'alt_tap_period_cov': performance_features.get('period_cov', 0.0),
-            'alt_tap_vel_pos_mean': performance_features.get('velocity_pos_mean', 0.0),
-            'alt_tap_vel_pos_pct_90': performance_features.get('velocity_pos_pct_90', 0.0),
-            'alt_tap_vel_pos_cov': performance_features.get('velocity_pos_cov', 0.0),
-            'alt_tap_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
-            'alt_tap_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
-            'alt_tap_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
-            # correctness of the tapping sequence (tapping order)
-            'alt_tap_accuracy': tapping_results['accuracy'],
-            'alt_tap_target_error': tapping_results['errors'],
-            # rhythm with CoV (period time between taps)
-            'alt_tap_cov': tapping_cov,
-            # isolation (variance of other fingers)
-            'alt_tap_isolation': isolation_score,
+
+            # tapping event counts
+            'alt_tap_total_attempts': len(resolved_taps),
+            'alt_tap_strict_successes': len(strict_taps),
+            'alt_tap_near_misses': len(near_misses),
+
+            # accuracy and rhythm
+            'alt_tap_accuracy': levenshtein_acc,
+            'alt_tap_target_error': levenshtein_err,
+            'alt_tap_rhythm_cov': rhythm_cov,
+
+            # task-independent features
+            'alt_tap_synergy': synergy_score,
+            'alt_tap_mean_volume': mean_volume,
+
+            # task-dependent features
+            'alt_tap_contrib_ratio': contrib_ratio,
+            'alt_tap_dwell_time': dwell_time,
+            'alt_tap_smoothness': smoothness,
+
         }
 
         # plot visualization
-        if save_plots and performance_features['extraction_status'] == 'success':
+        if save_plots and len(resolved_taps) > 0:
 
             self.viz.viz_repetitive_binary_exercises(time_axis=alt_tap_x,
                                                      signal=alt_tap_y,
