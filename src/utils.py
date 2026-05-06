@@ -265,17 +265,23 @@ class ToolBox:
             valid_df.loc[:,col] = arr
 
         # Butterworth filtering
-        b, a = butter(N=BUTTER_ORDER, Wn=CUTOFF_FREQ, btype='low', fs=self.fps, output='sos')
+        b, a = butter(N=BUTTER_ORDER, Wn=CUTOFF_FREQ, btype='low', fs=self.fps, output='ba')
 
-        # calculate padding (1.0 second)
-        padlen: int = int(1.0 * self.fps)
-        padlen = min(padlen, len(valid_df) - 1)     # prevent padlen from exceeding the data length
+        # prevent filtfilt crash for short signals
+        min_pad_len = 3 * max(len(a), len(b))
 
-        flat_coords_tensor: np.ndarray = valid_df.to_numpy()         # shape: (frames, valid_cols)
-        clean_coords_tensor: np.ndarray = filtfilt(b, a, flat_coords_tensor, axis=0, padlen=padlen)
+        if len(valid_df) <= min_pad_len:
+            clean_df[valid_cols] = valid_df.to_numpy()
+        else:
+            # calculate padding (1.0 second)
+            padlen: int = int(1.0 * self.fps)
+            padlen = min(padlen, len(valid_df) - 1)     # prevent padlen from exceeding the data length
 
-        # new data frame with filtered data
-        clean_df[valid_cols] = clean_coords_tensor
+            flat_coords_tensor: np.ndarray = valid_df.to_numpy()         # shape: (frames, valid_cols)
+            clean_coords_tensor: np.ndarray = filtfilt(b, a, flat_coords_tensor, axis=0, padlen=padlen)
+
+            # new data frame with filtered data
+            clean_df[valid_cols] = clean_coords_tensor
 
         # 2) adjust rotation matrices to new landmark location
         kinematic_chain: dict = self.get_kinematic_chain()
