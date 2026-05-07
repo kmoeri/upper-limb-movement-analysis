@@ -21,6 +21,9 @@ from src.config import config, project_path
 
 class Visualizer:
     def __init__(self) -> None:
+        # feature validation directory
+        self.features_path = os.path.join(project_path, 'data', '04_features')
+        os.makedirs(self.features_path, exist_ok=True)
         # main results directory (parent)
         self.results_path = os.path.join(project_path, 'data', '05_results')
         os.makedirs(self.results_path, exist_ok=True)
@@ -845,6 +848,91 @@ class Visualizer:
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
 
         plt.close(fig)
+
+    def feature_zscore_heatmap(self, feature_file_path: str) -> None:
+
+        print('\nGenerating Z-Score Feature Expression Heatmap ...')
+
+        df: pd.DataFrame = pd.read_csv(feature_file_path)
+
+        exercises = df['ex_name'].unique()
+        meta_cols: list[str] = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID', 'AHA_Score']
+
+        for ex_name in exercises:
+            # isolate current exercise
+            ex_df: pd.DataFrame = df[df['ex_name'] == ex_name].copy()
+
+            # identify numeric features
+            features = [col for col in ex_df.columns if col not in meta_cols and pd.api.types.is_numeric_dtype(ex_df[col])]
+
+            # isolate the healthy dataset to define the baseline
+            healthy_mask = ex_df['side_condition'].str.lower() == 'healthy'
+            healthy_df = ex_df[healthy_mask]
+
+            if healthy_df.empty:
+                print(f'Warning: No healthy side condition found for {ex_name}.')
+                continue
+
+            # calculate baseline statistics (healthy mean and std)
+            healthy_mean = healthy_df[features].mean()
+            healthy_std = healthy_df[features].std()
+
+            # prevent division by zero for zero-variance features
+            healthy_std.replace(0, 1e-8, inplace=True)
+
+            # apply z-score normalization
+            z_df = ex_df.copy()
+            z_df[features] = (ex_df[features] - healthy_mean) / healthy_std
+
+            # combine p_ID and visit ID to handle longitudinal data cleanly
+            z_df['participant_visit'] = z_df['p_ID'] + '_' + z_df['visit_ID'].astype(str)
+
+            # split into healthy and affected for plotting
+            h_z = z_df[z_df['side_condition'].str.lower() == 'healthy']
+            a_z = z_df[z_df['side_condition'].str.lower() == 'affected']
+
+            # pivot data: rows = features and columns = participants
+            h_pivot = h_z.pivot_table(index='participant_visit', values=features).T
+            a_pivot = a_z.pivot_table(index='participant_visit', values=features).T
+
+            # visualization
+            fig, axes = plt.subplots(ncols=2, figsize=(24, max(4, len(features) * 0.25)), sharey=True)
+
+            # color map is caped to +/- 4 Standard Deviations
+            vmin, vmax = -4.0, 4.0
+            cmap = 'vlag'
+
+            # healthy heatmap
+            sns.heatmap(h_pivot, ax=axes[0], cmap=cmap, vmin=vmin, vmax=vmax, annot=False, fmt='.1f', linewidths=0.5,
+                        cbar=False)
+            axes[0].set_title(f'Healthy Hand ({ex_name})', fontsize=18, pad=15)
+            axes[0].set_xlabel('Participant / Visit', fontsize=16, labelpad=10)
+            axes[0].set_ylabel('Features', fontsize=16, labelpad=10)
+            axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45, ha='right', fontsize=12)
+            axes[0].tick_params(labelsize=16)
+
+            # affected heatmap
+            sns.heatmap(a_pivot, ax=axes[1], cmap=cmap, vmin=vmin, vmax=vmax, annot=False, fmt='.1f', linewidths=0.5,
+                        cbar_kws={'label': 'Z-Score (Standard Deviations from Healthy Mean)'})
+            axes[1].set_title(f'Affected Hand ({ex_name})', fontsize=18, pad=15)
+            axes[1].set_xlabel('Participant / Visit', fontsize=16, labelpad=10)
+            axes[1].set_ylabel('', fontsize=16)
+            axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=45, ha='right', fontsize=12)
+
+            # format colorbar
+            cbar = axes[1].collections[0].colorbar
+            cbar.ax.tick_params(labelsize=12)
+            cbar.set_label('Z-Score (Standard Deviations from Healthy Mean)', size=16, labelpad=10)
+
+            plt.tight_layout()
+
+            suffix = '.png'
+            f_name: str = f'all_extracted_features_heatmap_{ex_name}' + suffix
+            f_path: str = os.path.join(self.features_path, f_name)
+            if not os.path.exists(f_path):
+                plt.savefig(f_path, format=suffix[1:], dpi=600)
+
+            plt.close()
 
     # ============================================================================= #
     #                            4) KINEMATICS QUALITY CHECK                        #

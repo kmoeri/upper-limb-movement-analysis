@@ -6,11 +6,11 @@
 import os
 import pandas as pd
 import numpy as np
-from numpy.conftest import dtype
 
 # modules
-from src.config import config, project_path
+from src.config import project_path
 from src.visualization import Visualizer
+
 
 def remove_label_prefix(label: str) -> str:
     prefixes_to_remove: list[str] = ['idx_tap_', 'alt_tap_', 'open_close_', 'pro_sup_']
@@ -31,38 +31,38 @@ def run_feature_reduction():
     df: pd.DataFrame = pd.read_csv(features_path)
     meta_cols = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID', 'AHA_Score']
 
-    # 2) calculate velocity ratio
-    print('\nGlobal Features Processing ...')
-    col_names: list[str] = df.columns.tolist()
-
-    # find positive velocity columns
-    pos_vel_cols: list[str] = [col for col in col_names if 'vel_pos' in col.lower() or '_pos' in col.lower()]
-
-    for pos_col in pos_vel_cols:
-        # find matching negative velocity columns
-        neg_col = pos_col.replace('pos', 'neg')
-
-        if neg_col in col_names:
-            ratio_col_name = pos_col.replace('pos', 'ratio')
-
-            # calculate absolute magnitude ratio (negative velocities are negative values)
-            df[ratio_col_name] = df[neg_col].abs() / (df[pos_col].abs() + 1e-8)
-
-            # drop positive velocity columns
-            df.drop(columns=[pos_col], inplace=True)
-
-    # drop other manually identified features
-    drop_col_names: list[str] = ['_rep_num', '_rep_freq', '_mean']
-    cols_to_drop: list[str] = [col for col in df.columns for sub in drop_col_names if sub in col]
-
-    if cols_to_drop:
-        df.drop(columns=cols_to_drop, inplace=True)
+    # # 2) calculate velocity ratio
+    # print('\nGlobal Features Processing ...')
+    # col_names: list[str] = df.columns.tolist()
+    #
+    # # find positive velocity columns
+    # pos_vel_cols: list[str] = [col for col in col_names if 'vel_pos' in col.lower() or '_pos' in col.lower()]
+    #
+    # for pos_col in pos_vel_cols:
+    #     # find matching negative velocity columns
+    #     neg_col = pos_col.replace('pos', 'neg')
+    #
+    #     if neg_col in col_names:
+    #         ratio_col_name = pos_col.replace('pos', 'ratio')
+    #
+    #         # calculate absolute magnitude ratio (negative velocities are negative values)
+    #         df[ratio_col_name] = df[neg_col].abs() / (df[pos_col].abs() + 1e-8)
+    #
+    #         # drop positive velocity columns
+    #         df.drop(columns=[pos_col], inplace=True)
+    #
+    # # drop other manually identified features
+    # drop_col_names: list[str] = ['_rep_num', '_rep_freq', '_mean']
+    # cols_to_drop: list[str] = [col for col in df.columns for sub in drop_col_names if sub in col]
+    #
+    # if cols_to_drop:
+    #     df.drop(columns=cols_to_drop, inplace=True)
 
     # prepare directory for saving plots
     out_dir: str = os.path.join(project_path, 'data', '05_results', '04_classification')
     os.makedirs(out_dir, exist_ok=True)
 
-    # 3) per-exercise processing
+    # 2) per-exercise processing
     print('\nExercise-Specific Features Processing ...')
     exercise = df['ex_name'].unique()
     for ex_name in exercise:
@@ -106,7 +106,7 @@ def run_feature_reduction():
         if drop_collinear:
             df.loc[ex_mask, drop_collinear] = np.nan
 
-    # 5) save clean version of features to CSV
+    # 3) save clean version of features to CSV
     df.to_csv(os.path.join(out_dir, 'clean_features.csv'), index=False)
     print('\nFeature Reduction Done. Results saved.')
 

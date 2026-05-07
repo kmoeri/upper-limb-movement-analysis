@@ -274,12 +274,10 @@ class ExerciseEvaluator:
                                                                          min_offset, max_offset)
 
         # create dictionary holding each time series array
-        tap_distance_data_dict: dict = {
-            'thumb-index': active_dist_dict[f'{thumb}-{finger_names[0]}']['normalized_distance'],
-            'thumb-middle': active_dist_dict[f'{thumb}-{finger_names[1]}']['normalized_distance'],
-            'thumb-ring': active_dist_dict[f'{thumb}-{finger_names[2]}']['normalized_distance'],
-            'thumb-pinky': active_dist_dict[f'{thumb}-{finger_names[3]}']['normalized_distance']
-        }
+        tap_distance_data_dict: dict = {}
+        for fn in finger_names:
+            finger_key = f'{thumb}-{fn}'
+            tap_distance_data_dict[finger_key] = active_dist_dict[finger_key]['normalized_distance']
 
         # 1.2) Implement inter-digit synergy using correlation matrix
 
@@ -386,7 +384,7 @@ class ExerciseEvaluator:
                 # slice the arrays to the exact window of this specific tap
                 w_window = wrist_arr[s_idx:e_idx]
                 t_window = thumb_arr[s_idx:e_idx]
-                f_window = target_arr[target_fn]
+                f_window = target_arr[s_idx:e_idx]
 
                 # anchor thumb and finger coordinates to the wrist
                 t_rel = t_window - w_window

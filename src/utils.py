@@ -984,14 +984,14 @@ def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
     return None
 
 
-def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) -> None:
+def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path: str) -> None:
     """
     Saves extracted movement parameters to a csv file with features from all exercises.
     Relies on Pandas dynamic DataFrame creation to handle varying exercise columns.
 
     Args:
         feature_list_of_dicts: List of dicts containing features from a specific trial.
-        out_dir: Directory where 'all_extracted_features.csv' is stored.
+        out_file_path: Directory where 'all_extracted_features.csv' is stored.
 
     Returns:
         None
@@ -1001,15 +1001,38 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) 
         print('No features provided. Skipping.')
         return
 
-    # csv main file
-    out_path: str = os.path.join(out_dir, 'all_extracted_features.csv')
-
     # load metric data into a dataframe
     data_df: pd.DataFrame = pd.DataFrame(feature_list_of_dicts)
 
+    # calculate velocity ratio
+    col_names: list[str] = data_df.columns.tolist()
+
+    # find positive velocity columns
+    pos_vel_cols: list[str] = [col for col in col_names if 'vel_pos' in col.lower() or '_pos' in col.lower()]
+
+    for pos_col in pos_vel_cols:
+        # find matching negative velocity columns
+        neg_col = pos_col.replace('pos', 'neg')
+
+        if neg_col in col_names:
+            ratio_col_name = pos_col.replace('pos', 'ratio')
+
+            # calculate absolute magnitude ratio (negative velocities are negative values)
+            data_df[ratio_col_name] = data_df[neg_col].abs() / (data_df[pos_col].abs() + 1e-8)
+
+            # drop positive velocity columns
+            data_df.drop(columns=[pos_col], inplace=True)
+
+    # drop other manually identified features
+    drop_col_names: list[str] = ['_rep_num', '_rep_freq', '_mean']
+    cols_to_drop: list[str] = [col for col in data_df.columns for sub in drop_col_names if sub in col]
+
+    if cols_to_drop:
+        data_df.drop(columns=cols_to_drop, inplace=True)
+
     # if the file already exists load and update the file
-    if os.path.exists(out_path):
-        main_df: pd.DataFrame = pd.read_csv(out_path)
+    if os.path.exists(out_file_path):
+        main_df: pd.DataFrame = pd.read_csv(out_file_path)
 
         combined_df: pd.DataFrame = pd.concat([data_df, main_df]).drop_duplicates(
             subset=['p_ID', 'visit_ID', 'ex_name', 'side_focus'],
@@ -1022,6 +1045,5 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_dir: str) 
     combined_df.sort_values(by=['p_ID', 'visit_ID', 'ex_name'], inplace=True)
 
     # save table
-    os.makedirs(out_dir, exist_ok=True)
-    combined_df.to_csv(out_path, index=False)
-    print(f'Successfully saved {len(combined_df)} trial records of extracted movement parameters to {out_path}')
+    combined_df.to_csv(out_file_path, index=False)
+    print(f'Successfully saved {len(combined_df)} trial records of extracted movement parameters: {out_file_path}')

@@ -9,13 +9,15 @@ from tqdm import tqdm
 from src.config import config, project_path
 from src.core import Participant
 from src.exercise_evaluation import ExerciseEvaluator
+from src.visualization import Visualizer
 from src.utils import save_extracted_data_to_csv
 
 
 def run_kinematics_extractor(save_plots: bool = True):
 
-    # create class instance from ExerciseEvaluator
+    # create class instance from ExerciseEvaluator and Visualizer
     ex_eval: ExerciseEvaluator = ExerciseEvaluator(config['camera_param']['fps'])
+    viz: Visualizer = Visualizer()
 
     # load participant objects
     participant_objs_path: str = os.path.join(project_path, 'data', '03_processed')
@@ -61,8 +63,11 @@ def run_kinematics_extractor(save_plots: bool = True):
 
                 # add the extracted metrics to the metadata
                 if metrics:
+                    # save all metrics to current exercise
                     exercise.metrics = metrics
-                    row_meta_data.update(metrics)
+                    # filter out the time series data for the extracted features
+                    csv_features = {key: value for key, value in metrics.items() if 'time_series' not in key}
+                    row_meta_data.update(csv_features)
                     all_extracted_features_lst.append(row_meta_data)
 
             except Exception as e:
@@ -74,7 +79,11 @@ def run_kinematics_extractor(save_plots: bool = True):
     # save the extracted features to a csv file
     feature_dir: str = os.path.join(project_path, 'data', '04_features')
     os.makedirs(feature_dir, exist_ok=True)
-    save_extracted_data_to_csv(all_extracted_features_lst, out_dir=feature_dir)
+    feature_file_path = os.path.join(feature_dir, 'all_extracted_features.csv')
+    save_extracted_data_to_csv(all_extracted_features_lst, out_file_path=feature_file_path)
+
+    if os.path.exists(feature_file_path):
+        viz.feature_zscore_heatmap(feature_file_path)
 
 
 if __name__ == '__main__':
