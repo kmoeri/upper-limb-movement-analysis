@@ -26,12 +26,20 @@ class Exercise:
 
     # data storage
     raw_landmark_data_path: str = ''                # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ.parquet'
+    trimmed_landmark_data_path: str = ''            # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ_trimmed.parquet'
     clean_landmark_data_path: str = ''              # e.g., 'data/02_tracking_data/...P001_T1_WT-01_camZ_clean.parquet'
 
     metrics: dict = field(default_factory=dict)     # stores results
 
     def load_dataframe(self, stage: str = 'raw') -> pd.DataFrame:
-        file_path: str = self.raw_landmark_data_path if stage == 'raw' else self.clean_landmark_data_path
+        if stage == 'raw':
+            file_path: str = self.raw_landmark_data_path
+        elif stage == 'trimmed':
+            file_path: str = self.trimmed_landmark_data_path
+        elif stage == 'clean':
+            file_path: str = self.clean_landmark_data_path
+        else:
+            raise ValueError(f'Stage "{stage}" not supported.')
 
         if not file_path or not os.path.exists(file_path):
             raise FileNotFoundError(f'Data for stage "{stage}" not found at {file_path}.')
@@ -39,10 +47,17 @@ class Exercise:
         return pd.read_parquet(file_path)
 
     def save_dataframe(self, df: pd.DataFrame, stage: str = 'clean') -> None:
-        file_path: str = self.raw_landmark_data_path if stage == 'raw' else self.clean_landmark_data_path
+        if stage == 'raw':
+            file_path: str = self.raw_landmark_data_path
+        elif stage == 'trimmed':
+            file_path: str = self.trimmed_landmark_data_path
+        elif stage == 'clean':
+            file_path: str = self.clean_landmark_data_path
+        else:
+            raise ValueError(f'Stage "{stage}" not supported.')
 
         if not file_path:
-            raise ValueError(f'Save aborted: Data for stage "{stage}" has not been set.')
+            raise ValueError(f'Error: Save aborted: Data path for stage "{stage}" has not been set.')
 
         df.to_parquet(file_path, engine='pyarrow')
 

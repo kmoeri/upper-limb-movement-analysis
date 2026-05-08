@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# scripts/01_run_tracking.py
+# scripts/00_run_tracking.py
 
 # libraries
 import os

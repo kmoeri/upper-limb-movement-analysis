@@ -23,28 +23,15 @@ def run_participant_loader():
     for tracked_data_dir in tracked_data_dirs:
         for x in sorted(os.listdir(tracked_data_dir)):
             # skip non-project or non-parquet files
-            if not x.startswith(project_name) or not x.endswith('.parquet'):
-                continue
-            # skip for already processed files
-            if x.endswith('_clean.parquet'):
+            if not x.startswith(project_name) or not x.endswith('_raw.parquet'):
                 continue
 
             file_path: str = os.path.join(tracked_data_dir, x)
-
-            # if the file has not been labeled '_raw' yet
-            if not x.endswith('_raw.parquet'):
-                # replace the end of the file string
-                new_name: str = x[:-8] + '_raw.parquet'
-                new_filepath: str = os.path.join(tracked_data_dir, new_name)
-                os.rename(file_path, new_filepath)
-                file_path = new_filepath
-
             tracked_data_path_lst.append(file_path)
 
     # load Participant objects
     load_participants(tracked_data_path_lst)
-
-    print('Loading finished.')
+    print('\nLoading finished.')
 
 
 if __name__ == "__main__":

@@ -97,6 +97,13 @@ def load_participants(parquet_file_paths: list) -> None:
     # create ToolBox object for utility function calling
     tb: ToolBox = ToolBox()
 
+    # load the trim registry
+    registry_path: str = os.path.join(project_path, 'data', '03_processed', 'trim_registry.csv')
+    if os.path.exists(registry_path):
+        reg_df = pd.read_csv(registry_path)
+    else:
+        reg_df = pd.DataFrame()
+
     print('Smoothing and registering participant landmarks ...')
     # loop through all csv files and add all exercises to the corresponding Participant
     for raw_path in tqdm(parquet_file_paths, desc='Filtering Landmark Coordinates'):
@@ -117,11 +124,13 @@ def load_participants(parquet_file_paths: list) -> None:
 
         # 5) add path to file pointer
         ex.raw_landmark_data_path = raw_path
+        trimmed_path = raw_path.replace('_raw.parquet', '_trimmed.parquet')
+        ex.trimmed_landmark_data_path = trimmed_path
         clean_path = raw_path.replace('_raw.parquet', '_clean.parquet')
         ex.clean_landmark_data_path = clean_path
 
+        # 6) data processing phase
         if not os.path.exists(clean_path):
-            # 6) data processing phase
             # load
             raw_df: pd.DataFrame = ex.load_dataframe('raw')
 
@@ -143,13 +152,27 @@ def load_participants(parquet_file_paths: list) -> None:
                     # swaps '2' to '1' only if it immediately follows a known prefix at the start of the string
                     swap_map[col] = re.sub(f'^{prefixes}2', r'\g<1>1', col)
 
-            # Apply the renaming
+            # apply the renaming
             raw_df.rename(columns=swap_map, inplace=True)
             # -----------------------------------------------
 
-            # filter
-            clean_df: pd.DataFrame = tb.filter_landmark_dataframe(raw_df)
-            # save
+            # apply trimming
+            start_frame = 0
+            end_frame = len(raw_df) - 1
+            if not reg_df.empty:
+                # find matching row in registry
+                mask = ((reg_df['p_ID'] == p_id) & (reg_df['visit_ID'] == visit_id) &
+                        (reg_df['ex_name'] == ex_name) & (reg_df['side_focus'] == ex_side))
+                if mask.any():
+                    start_frame = int(reg_df.loc[mask, 'start_frame'].values[0])
+                    end_frame = int(reg_df.loc[mask, 'end_frame'].values[0])
+
+            # slice and save trimmed
+            trimmed_df = raw_df.iloc[start_frame:end_frame+1].reset_index(drop=True)
+            ex.save_dataframe(trimmed_df, stage='trimmed')
+
+            # filter and save clean
+            clean_df: pd.DataFrame = tb.filter_landmark_dataframe(trimmed_df)
             ex.save_dataframe(clean_df, stage='clean')
 
         # add exercise object to participant
