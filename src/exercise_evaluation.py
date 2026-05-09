@@ -134,13 +134,13 @@ class ExerciseEvaluator:
 
         # 1.2) correctness of the tapping (spatial accuracy)
         valid_valley_idc: list = active_dist_dict[pair_key]['features']['valid_valleys_idx']
-        norm_dist_arr: np.ndarray = active_dist_dict[pair_key]['normalized_distance']
+        active_norm_dist_arr: np.ndarray = active_dist_dict[pair_key]['normalized_distance']
 
         if len(valid_valley_idc) > 0:
             valid_dist: float = config['index_ftap']['min_dist_thresh']
 
             # Euclidean distance at each event (valley)
-            valley_dist_arr: np.ndarray = norm_dist_arr[valid_valley_idc]
+            valley_dist_arr: np.ndarray = active_norm_dist_arr[valid_valley_idc]
 
             # results
             mean_target_error: float = float(np.mean(valley_dist_arr))
@@ -168,17 +168,17 @@ class ExerciseEvaluator:
         wrist_key = f'wrist{active_side_idx}'
 
         # calculate Euclidean distance for passive fingers
-        passive_kinematics: dict = self._extract_distance_based_kinematics(df,
-                                                                           p_hand_size,
-                                                                           wrist_key,
-                                                                           passive_fingers,
-                                                                           ex_peak_cfg,
-                                                                           min_offset, max_offset)
+        passive_fingers_dist_dict: dict = self._extract_distance_based_kinematics(df,
+                                                                                  p_hand_size,
+                                                                                  wrist_key,
+                                                                                  passive_fingers,
+                                                                                  ex_peak_cfg,
+                                                                                  min_offset, max_offset)
 
         # calculate the isolation variances
         isolation_variances: list = []
         for tap_idx in valid_valley_idc:
-            for passive_kin_key, p_data in passive_kinematics.items():
+            for passive_kin_key, p_data in passive_fingers_dist_dict.items():
                 dist_arr: np.ndarray = p_data['normalized_distance']
                 start: int = max(0, tap_idx - half_window)
                 end: int = min(len(dist_arr), tap_idx + half_window)
@@ -187,9 +187,46 @@ class ExerciseEvaluator:
 
         isolation_score: float = float(np.mean(isolation_variances)) if isolation_variances else 0.0
 
-        # 2) extract general metrics (e.g., task impairment by spectrogram)
+        # 2) smoothness of movement (entropy)
+        # get current passive side
+        passive_side_idx: int = 2 if exercise.side_focus == 'L' else 1
 
-        # 3) associated reactions (passive hand movement -> mirror movement)
+        # modify landmark names to hold the side information (left: 1, right: 2)
+        p_anchor: str = f'cmc{passive_side_idx}1'        # thenar
+        p_target: str = f'ftip{passive_side_idx}2'       # index fingertip
+        p_pair_key: str = f'{p_anchor}-{p_target}'
+
+        # check whether the passive hand was tracked in this dataframe
+        if f'{p_anchor}_x' in df.columns and f'{p_target}_x' in df.columns:
+            # calculate Euclidean distance for passive fingers
+            passive_limb_dict = self._extract_distance_based_kinematics(df,
+                                                                        p_hand_size,
+                                                                        p_anchor,
+                                                                        [p_target],
+                                                                        ex_peak_cfg,
+                                                                        min_offset, max_offset)
+            # get the time series of the passive tapping movement
+            passive_norm_dist_arr = passive_limb_dict[p_pair_key]['normalized_distance']
+
+        else:
+            # the passive hand wasn't tracked, assume resting out of frame (0 movement)
+            passive_norm_dist_arr = np.zeros_like(active_norm_dist_arr)
+
+        # calculate the spectral entropy metrics
+        spectral_metrics = self.kf.calc_spectral_entropy(sig_active=active_norm_dist_arr,
+                                                         sig_passive=passive_norm_dist_arr)
+
+        # get the spectral entropy score of the active hand as measure of smoothness
+        entropy_active: float = spectral_metrics['Spectral_Entropy_Active_Global']
+
+        # 3) associated reactions (mirror movements) by total energy ratio
+
+        # extract global energy totals for active and passive hand
+        energy_active: float = spectral_metrics['Total_Energy_Active_Global']
+        energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
+
+        # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
+        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
@@ -225,6 +262,10 @@ class ExerciseEvaluator:
             'idx_tap_cov': tapping_cov,
             # isolation (variance of other fingers)
             'idx_tap_isolation': isolation_score,
+            # spectral entropy (smoothness)
+            'idx_tap_entropy': entropy_active,
+            # mirror movement (energy ratio)
+            'idx_tap_mirror': energy_ratio
         }
 
         # plot visualization
@@ -433,9 +474,42 @@ class ExerciseEvaluator:
             alt_tap_x.append(p_feat.get('time_axis', []))
             alt_tap_features.append(p_feat)
 
-        # 2) extract general metrics (e.g., task impairment by spectrogram)
+        # 2) smoothness of movement (entropy)
+        # get current passive side
+        passive_side_idx: int = 2 if exercise.side_focus == 'L' else 1
+        p_lm_corr_names: list[str] = [f'{x[:-1]}{passive_side_idx}{x[-1]}' for x in lm_base_names]
+        p_thumb: str = p_lm_corr_names[0]
+        p_target: str = p_lm_corr_names[1]  # reference index finger
 
-        # 3) associated reactions (passive hand movement -> mirror movement)
+        # active thumb-index Euclidean distance change as reference for spectral comparison
+        active_norm_dist_arr: np.ndarray = active_dist_dict[f'{thumb}-{finger_names[0]}']['normalized_distance']
+
+        if f'{p_thumb}_x' in df.columns and f'{p_target}_x' in df.columns:
+            passive_limb_dict = self._extract_distance_based_kinematics(df,
+                                                                        p_hand_size,
+                                                                        p_thumb,
+                                                                        [p_target],
+                                                                        ex_peak_cfg,
+                                                                        min_offset, max_offset)
+            passive_norm_dist_arr = passive_limb_dict[f'{p_thumb}-{p_target}']['normalized_distance']
+        else:
+            passive_norm_dist_arr = np.zeros_like(active_norm_dist_arr)
+
+        # get spectral entropy metrics
+        spectral_metrics = self.kf.calc_spectral_entropy(sig_active=active_norm_dist_arr,
+                                                         sig_passive=passive_norm_dist_arr)
+
+        # get the spectral entropy score of the active hand as measure of smoothness
+        entropy_active: float = spectral_metrics['Spectral_Entropy_Active_Global']
+
+        # 3) associated reactions (mirror movements) by total energy ratio
+
+        # extract global energy totals for active and passive hand
+        energy_active: float = spectral_metrics['Total_Energy_Active_Global']
+        energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
+
+        # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
+        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
@@ -466,6 +540,10 @@ class ExerciseEvaluator:
             'alt_tap_dwell_time': dwell_time,
             'alt_tap_smoothness': smoothness,
 
+            # spectral entropy (smoothness)
+            'idx_tap_entropy': entropy_active,
+            # mirror movement (energy ratio)
+            'idx_tap_mirror': energy_ratio
         }
 
         # plot visualization
@@ -480,7 +558,7 @@ class ExerciseEvaluator:
 
         return results
 
-    def analyze_hand_opening(self, exercise: Exercise, p_id: str, p_hand_size: float, save_plots: bool = False) -> dict:
+    def analyze_hand_opening(self, exercise: Exercise, p_id: str, save_plots: bool = False) -> dict:
 
         # 1) extract the exercise-specific metric
         # get current active side
@@ -620,9 +698,48 @@ class ExerciseEvaluator:
 
         synchronization_score: float = float(np.mean(dispersion_variances)) if dispersion_variances else 0.0
 
-        # 2) extract general metrics (e.g., task impairment by spectrogram)
+        # 2) smoothness of movement (entropy)
+        passive_side_idx = 2 if active_side_idx == 1 else 1
+        p_wrist = f'{lm_base_names[0]}{passive_side_idx}'
+        p_mcp = f'mcp{passive_side_idx}2'
+        p_pip = f'pip{passive_side_idx}2'
+        p_dip = f'dip{passive_side_idx}2'
+        p_tip = f'ftip{passive_side_idx}2'
 
-        # 3) associated reactions (passive hand movement -> mirror movement)
+        # We will compute the KCR of the passive index finger as the comparative signal
+        if f'{p_tip}_x' in df.columns and f'{p_wrist}_x' in df.columns:
+            p_w_arr = df[[f'{p_wrist}_x', f'{p_wrist}_y', f'{p_wrist}_z']].to_numpy()
+            p_m_arr = df[[f'{p_mcp}_x', f'{p_mcp}_y', f'{p_mcp}_z']].to_numpy()
+            p_p_arr = df[[f'{p_pip}_x', f'{p_pip}_y', f'{p_pip}_z']].to_numpy()
+            p_d_arr = df[[f'{p_dip}_x', f'{p_dip}_y', f'{p_dip}_z']].to_numpy()
+            p_t_arr = df[[f'{p_tip}_x', f'{p_tip}_y', f'{p_tip}_z']].to_numpy()
+
+            p_dist_ftip_wrist = np.linalg.norm(p_t_arr - p_w_arr, axis=1)
+            p_sum_segments = (np.linalg.norm(p_m_arr - p_w_arr, axis=1) +
+                              np.linalg.norm(p_p_arr - p_m_arr, axis=1) +
+                              np.linalg.norm(p_d_arr - p_p_arr, axis=1) +
+                              np.linalg.norm(p_t_arr - p_d_arr, axis=1))
+
+            p_kcr = np.clip(p_dist_ftip_wrist / np.clip(p_sum_segments, 1e-8, None), 0.0, 1.0)
+            passive_norm_dist_arr = np.clip((p_kcr - min_offset) / (max_offset - min_offset), 0.0, 1.0)
+        else:
+            passive_norm_dist_arr = np.zeros_like(avg_kcr_arr)
+
+        # calculate spectral entropy metrics
+        spectral_metrics = self.kf.calc_spectral_entropy(sig_active=avg_kcr_arr,
+                                                         sig_passive=passive_norm_dist_arr)
+
+        # get the spectral entropy score of the active hand as measure of smoothness
+        entropy_active: float = spectral_metrics['Spectral_Entropy_Active_Global']
+
+        # 3) associated reactions (mirror movements) by total energy ratio
+
+        # extract global energy totals for active and passive hand
+        energy_active: float = spectral_metrics['Total_Energy_Active_Global']
+        energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
+
+        # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
+        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
@@ -655,7 +772,11 @@ class ExerciseEvaluator:
             'open_close_extension_score': extension_score,
             'open_close_flexion_score': flexion_score,
             # synchronization of finger movement using temporal dispersion
-            'open_close_sync': synchronization_score
+            'open_close_sync': synchronization_score,
+            # spectral entropy (smoothness)
+            'idx_tap_entropy': entropy_active,
+            # mirror movement (energy ratio)
+            'idx_tap_mirror': energy_ratio
         }
 
         # plot visualization
@@ -715,9 +836,38 @@ class ExerciseEvaluator:
         # the total out-of-plane compensation movement during the pronation-supination exercise
         total_comp_movement: float = x_stability_score + z_stability_score
 
-        # 2) extract general metrics (e.g., task impairment by spectrogram)
+        # 2) smoothness of movement (entropy)
+        # get current passive side
+        passive_side_idx = 2 if active_side_idx == 1 else 1
 
-        # 3) associated reactions (passive hand movement -> mirror movement)
+        # modify landmark names to hold the side information (left: 1, right: 2)
+        lm_base_names = config['pro_sup']['landmark_names']
+        p_wrist = f'{lm_base_names[0]}{passive_side_idx}'
+        p_mcp2 = f'mcp{passive_side_idx}2'
+
+        if f'{p_wrist}_x' in df.columns and f'{p_mcp2}_x' in df.columns:
+            # calculate the equivalent rotational angles for the passive hand
+            _, p_euler_y, _ = self.tb.calculate_3d_hand_rotation(df, passive_side_idx)
+            passive_signal = p_euler_y
+
+        else:
+            passive_signal = np.zeros_like(euler_y)
+
+        # calculate the spectral entropy metrics
+        spectral_metrics = self.kf.calc_spectral_entropy(sig_active=euler_y,
+                                                         sig_passive=passive_signal)
+
+        # get the spectral entropy score of the active hand as measure of smoothness
+        entropy_active: float = spectral_metrics['Spectral_Entropy_Active_Global']
+
+        # 3) associated reactions (mirror movements) by total energy ratio
+
+        # extract global energy totals for active and passive hand
+        energy_active: float = spectral_metrics['Total_Energy_Active_Global']
+        energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
+
+        # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
+        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
         # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
 
@@ -752,6 +902,10 @@ class ExerciseEvaluator:
             'pro_sup_rot_cov': rotation_cov,
             # rotation stability
             'pro_sup_isolation': total_comp_movement,
+            # spectral entropy (smoothness)
+            'idx_tap_entropy': entropy_active,
+            # mirror movement (energy ratio)
+            'idx_tap_mirror': energy_ratio
         }
 
         # plot visualization

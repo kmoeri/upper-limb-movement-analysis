@@ -693,11 +693,11 @@ class ToolBox:
     def init_short_time_fft(self) -> ShortTimeFFT:
 
         # configuration
-        fs = self.fps                                               # sampling rate [Hz]
-        nperseg = config['parameter_extraction']['nperseg']         # number of points per segment
-        noverlap = config['parameter_extraction']['noverlap']       # number of overlapping points
-        mfft = config['parameter_extraction']['mfft']               # number of FFT points
-        window = config['parameter_extraction']['window']           # window to smooth signal edges
+        fs = self.fps                                                       # sampling rate [Hz]
+        nperseg = config['parameter_extraction'].get('nperseg', 128)        # number of points per segment
+        noverlap = config['parameter_extraction'].get('noverlap', 118)      # number of overlapping points
+        mfft = config['parameter_extraction'].get('mfft', 512)              # number of FFT points
+        window = config['parameter_extraction'].get('window', 'hann')       # window to smooth signal edges
 
         # initialize object with configuration parameters
         SFT = ShortTimeFFT.from_window(window, fs=fs, nperseg=nperseg, noverlap=noverlap, mfft=mfft,

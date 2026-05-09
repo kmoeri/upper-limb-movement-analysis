@@ -20,7 +20,7 @@ class KinematicFeatures:
         """
         Calculates the global and time-varying Spectral Shannon Entropy for both the active
         and passive limbs. Uses a shared noise floor (calibrated on the active limb) to
-        suppress tracking noise and isolate the complexity of the true biomechanical movement.
+        suppress tracking noise and isolate the true biomechanical movement.
 
         Args:
             sig_active (np.ndarray): 1D array of kinematic time-series data for the active/task limb.
@@ -54,9 +54,9 @@ class KinematicFeatures:
         Sxx_power_passive = np.abs(Sx_complex_passive) ** 2
 
         # upper and lower limits
-        global_ceiling = np.percentile(Sxx_power_active, config['parameter_extraction']['vmax_percentile'])
-        n_order_mag: int = config['parameter_extraction']['vmin_factor']
-        global_floor = global_ceiling * pow(1e1, (-1)*n_order_mag)
+        global_ceiling = np.percentile(Sxx_power_active, config['parameter_extraction'].get('vmax_percentile', 95.0))
+        n_order_mag: int = config['parameter_extraction'].get('vmin_factor', 4)
+        global_floor = global_ceiling * pow(1e1, (-1) * n_order_mag)
 
         # set values below the global floor to zero
         power_active_clean = Sxx_power_active.copy()
@@ -111,7 +111,7 @@ class KinematicFeatures:
         def _get_safe_norm_ot_entropy(power_matrix):
             """
                 Calculates the normalized spectral Shannon Entropy over time (for each time window).
-                Safely suppresses SciPy division warnings caused by empty/gated time windows.
+                Suppresses SciPy division warnings caused by empty time windows.
 
                 Args:
                     power_matrix (np.ndarray): 2D array of cropped, noise-gated STFT power values.
