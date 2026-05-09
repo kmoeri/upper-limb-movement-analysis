@@ -228,7 +228,8 @@ class ExerciseEvaluator:
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
         energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
-        # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
+        # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
+        proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
 
         # 5) create result dictionary
 
@@ -265,7 +266,9 @@ class ExerciseEvaluator:
             # spectral entropy (smoothness)
             'idx_tap_entropy': entropy_active,
             # mirror movement (energy ratio)
-            'idx_tap_mirror': energy_ratio
+            'idx_tap_mirror': energy_ratio,
+            # proximal movement compensation (total path length)
+            'idx_tap_proximal_comp': proximal_comp
         }
 
         # plot visualization
@@ -511,7 +514,8 @@ class ExerciseEvaluator:
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
         energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
-        # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
+        # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
+        proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
 
         # 5) Create result dictionary
 
@@ -541,9 +545,11 @@ class ExerciseEvaluator:
             'alt_tap_smoothness': smoothness,
 
             # spectral entropy (smoothness)
-            'idx_tap_entropy': entropy_active,
+            'alt_tap_entropy': entropy_active,
             # mirror movement (energy ratio)
-            'idx_tap_mirror': energy_ratio
+            'alt_tap_mirror': energy_ratio,
+            # proximal movement compensation (total path length)
+            'alt_tap_proximal_comp': proximal_comp
         }
 
         # plot visualization
@@ -741,7 +747,8 @@ class ExerciseEvaluator:
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
         energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
-        # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
+        # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
+        proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
 
         # 5) Create result dictionary
 
@@ -774,9 +781,11 @@ class ExerciseEvaluator:
             # synchronization of finger movement using temporal dispersion
             'open_close_sync': synchronization_score,
             # spectral entropy (smoothness)
-            'idx_tap_entropy': entropy_active,
+            'open_close_entropy': entropy_active,
             # mirror movement (energy ratio)
-            'idx_tap_mirror': energy_ratio
+            'open_close_mirror': energy_ratio,
+            # proximal movement compensation (total path length)
+            'open_close_proximal_comp': proximal_comp
         }
 
         # plot visualization
@@ -869,7 +878,8 @@ class ExerciseEvaluator:
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
         energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
 
-        # 4) spasticity/cramping (dynamic behavior of affected side while active or passive)
+        # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
+        proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
 
         # 5) Create result dictionary
 
@@ -903,9 +913,11 @@ class ExerciseEvaluator:
             # rotation stability
             'pro_sup_isolation': total_comp_movement,
             # spectral entropy (smoothness)
-            'idx_tap_entropy': entropy_active,
+            'pro_sup_entropy': entropy_active,
             # mirror movement (energy ratio)
-            'idx_tap_mirror': energy_ratio
+            'pro_sup_mirror': energy_ratio,
+            # proximal movement compensation (total path length)
+            'pro_sup_proximal_comp': proximal_comp
         }
 
         # plot visualization

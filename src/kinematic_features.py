@@ -155,15 +155,54 @@ class KinematicFeatures:
 
         pass
 
-    def calc_spastic_drift(self, segment_df: pd.DataFrame) -> dict:
+    @staticmethod
+    def calc_movement_compensation(df: pd.DataFrame, active_side_idx: int) -> float:
+        """
+        Calculates the severity of proximal movement compensation (associated reactions)
+        by measuring the total 3D path length traveled by the wrist, elbow and shoulder joints
+        during a hand exercise.
 
-        # calculate the average finger to palm distance
+        Args:
+            df (pd.DataFrame): The filtered coordinate dataframe.
+            active_side_idx (int): 1 for Left, 2 for Right.
 
-        # calculate the angular change between the hand and the lower arm (wrist flexion)
+        Returns:
+            total_compensation (float): The total proximal path length (sum of wrist, elbow, and shoulder translation).
+        """
 
-        # calculate the angular changes in the elbow joint and the shoulder joint
+        wrist_name: str = f'wrist{active_side_idx}'
+        elbow_name: str = f'elbow{active_side_idx}'
+        shoulder_name: str = f'shoulder{active_side_idx}'
 
-        pass
+        # ensure all landmarks exist
+        if f'{wrist_name}_x' not in df.columns or f'{elbow_name}_x' not in df.columns or f'{shoulder_name}_x' not in df.columns:
+            print(f'\nWarning: Missing upper limb landmarks for compensation check. Returning 0.0.')
+            return 0.0
+
+        # extract 3D coordinate arrays
+        wrist_arr: np.ndarray = df[[f'{wrist_name}_x', f'{wrist_name}_y', f'{wrist_name}_z']].to_numpy()
+        elbow_arr: np.ndarray = df[[f'{elbow_name}_x', f'{elbow_name}_y', f'{elbow_name}_z']].to_numpy()
+        shoulder_arr: np.ndarray = df[[f'{shoulder_name}_x', f'{shoulder_name}_y', f'{shoulder_name}_z']].to_numpy()
+
+        # calculate the frame-to-frame displacement (velocity vector)
+        wrist_diff: np.ndarray = np.diff(wrist_arr, axis=0)
+        elbow_diff: np.ndarray = np.diff(elbow_arr, axis=0)
+        shoulder_diff: np.ndarray = np.diff(shoulder_arr, axis=0)
+
+        # calculate the Euclidean magnitude of the displacement for each frame
+        wrist_dist_per_frame: np.ndarray = np.linalg.norm(wrist_diff, axis=1)
+        elbow_dist_per_frame: np.ndarray = np.linalg.norm(elbow_diff, axis=1)
+        shoulder_dist_per_frame: np.ndarray = np.linalg.norm(shoulder_diff, axis=1)
+
+        # get the total path length by the sum of distances
+        total_wrist_path: float = float(np.sum(wrist_dist_per_frame))
+        total_elbow_path: float = float(np.sum(elbow_dist_per_frame))
+        total_shoulder_path: float = float(np.sum(shoulder_dist_per_frame))
+
+        # compensation total
+        total_compensation: float = total_wrist_path + total_elbow_path + total_shoulder_path
+
+        return total_compensation
 
     def calc_kinematic_parameters(self, raw_signal: np.ndarray, custom_cfg: dict = None) -> dict:
         """
