@@ -179,7 +179,6 @@ def load_participants(parquet_file_paths: list) -> None:
         all_participants[session_key].add_exercise(ex)
 
     # calculate the reference hand size for each participant, add it to each exercise, and save the participant objects
-    print('Calculating anatomical reference hand sizes ...')
     for p in tqdm(all_participants.values(), desc='Calculating Participant Hand Size.'):
 
         left_sizes: dict = {}

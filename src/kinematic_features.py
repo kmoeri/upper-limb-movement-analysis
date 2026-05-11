@@ -393,14 +393,15 @@ class KinematicFeatures:
         return flexion_angle
 
     def extract_alt_tap_event_hysteresis(self, distance_signals: dict, tap_thresh: float = 0.25,
-                                         release_thresh: float = 0.40, strict_cutoff: float = 0.10) -> list:
+                                         min_clearance: float = 0.10, strict_cutoff: float = 0.10) -> list:
         """
         Extracts intended finger taps from Euclidean distances of multiple time series data using threshold hysteresis.
+
 
         Args:
             distance_signals (dict): Dictionary mapping finger pairs to 1D numpy distance arrays.
             tap_thresh (float): Distance threshold value the signal must drop below to activate a tap window.
-            release_thresh (float): Distance threshold value the signal must rise above to deactivate the tap window.
+            min_clearance (float): Relative distance the signal must rise above to deactivate the tap window (prominence).
             strict_cutoff (float): Events reaching a distance lower than this threshold are 'strict' taps, all other
             taps below 0.25 are classified as 'near_miss'.
 
@@ -412,52 +413,36 @@ class KinematicFeatures:
 
         # find all tap windows for all fingers independently
         for finger_key, signal in distance_signals.items():
-            in_tap = False
-            start_idx = 0
-            min_val = float('inf')
-            min_idx = 0
 
-            for i, val in enumerate(signal):
-                if not in_tap and val < tap_thresh:
-                    # open a tap window
-                    in_tap = True
-                    start_idx = i
-                    min_val = val
-                    min_idx = i
-                elif in_tap:
-                    # track the local minimum within the tap window
-                    if val < min_val:
-                        min_val = val
-                        min_idx = i
+            # invert signal for scipy peak finder
+            inv_sig: np.ndarray = -np.array(signal)
 
-                    # close the tap window
-                    if val > release_thresh:
-                        in_tap = False
-                        all_candidates.append({'finger_key': finger_key,
-                                               'start_idx': start_idx,
-                                               'min_idx': min_idx,
-                                               'end_idx': i,
-                                               'min_dist': min_val,
-                                               'type': 'strict' if min_val <= strict_cutoff else 'near_miss'})
+            # find valleys (must be lower than 0.25 with a prominence/clearance of 0.10)
+            valleys, props = find_peaks(inv_sig, height=-tap_thresh, prominence=min_clearance)
 
-            # catch time windows not closed at the end of a video
-            if in_tap:
+            # extract the boundaries (detected valley at the very start an end of the signal)
+            for i, v_idx in enumerate(valleys):
+                val = signal[v_idx]
+
+                # store exact valleys for SPARC and dwell time
+                start_idx = props['left_bases'][i]
+                end_idx = props['right_bases'][i]
+
                 all_candidates.append({'finger_key': finger_key,
                                        'start_idx': start_idx,
-                                       'min_idx': min_idx,
-                                       'end_idx': len(signal) - 1,
-                                       'min_dist': min_val,
-                                       'type': 'strict' if min_val <= strict_cutoff else 'near_miss'})
+                                       'min_idx': v_idx,
+                                       'end_idx': end_idx,
+                                       'min_dist': val,
+                                       'type': 'strict' if val <= strict_cutoff else 'near_miss'})
 
-        # sort all candidates chronologically by their minimum point
-        all_candidates.sort(key=lambda x: x['min_idx'])
+            # sort all candidates by their minimum point
+            all_candidates.sort(key=lambda x: x['min_idx'])
 
-        if not all_candidates:
-            return []
+            if not all_candidates:
+                return []
 
         # handle superpositions - multiple fingers tap within 0.25 seconds of each other
         min_separation_frames = int(self.fps * 0.25)
-
         resolve_events = []
         current_group = [all_candidates[0]]
 

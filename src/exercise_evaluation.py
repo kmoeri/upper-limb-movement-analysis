@@ -273,12 +273,12 @@ class ExerciseEvaluator:
         # plot visualization
         if save_plots and performance_features['extraction_status'] == 'success':
 
-            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_original'],
-                                                     features=performance_features,
-                                                     p_id=p_id,
-                                                     visit_id=exercise.visit_id,
-                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+            self.viz.viz_single_signal_exercises(time_axis=performance_features['time_axis'],
+                                                 signal=performance_features['signal_original'],
+                                                 features=performance_features,
+                                                 p_id=p_id,
+                                                 visit_id=exercise.visit_id,
+                                                 ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
 
@@ -320,7 +320,9 @@ class ExerciseEvaluator:
         tap_distance_data_dict: dict = {}
         for fn in finger_names:
             finger_key = f'{thumb}-{fn}'
-            tap_distance_data_dict[finger_key] = active_dist_dict[finger_key]['normalized_distance']
+            p_feat = active_dist_dict[finger_key]['features']
+            smoothed_sig = p_feat.get('signal_original', active_dist_dict[finger_key]['normalized_distance'])
+            tap_distance_data_dict[finger_key] = smoothed_sig
 
         # 1.2) Implement inter-digit synergy using correlation matrix
 
@@ -471,8 +473,11 @@ class ExerciseEvaluator:
         alt_tap_features: list = []
 
         for fn in finger_names:
+            finger_key: str = f'{thumb}-{fn}'
             p_feat = active_dist_dict[f'{thumb}-{fn}']['features']
-            alt_tap_y.append(p_feat.get('signal_original', []))
+            p_feat['hysteresis_strict'] = [t['min_idx'] for t in strict_taps if t['finger_key'] == finger_key]
+            p_feat['hysteresis_near'] = [t['min_idx'] for t in near_misses if t['finger_key'] == finger_key]
+            alt_tap_y.append(tap_distance_data_dict[finger_key])
             alt_tap_x.append(p_feat.get('time_axis', []))
             alt_tap_features.append(p_feat)
 
@@ -554,12 +559,12 @@ class ExerciseEvaluator:
         # plot visualization
         if save_plots and len(resolved_taps) > 0:
 
-            self.viz.viz_repetitive_binary_exercises(time_axis=alt_tap_x,
-                                                     signal=alt_tap_y,
-                                                     features=alt_tap_features,
-                                                     p_id=p_id,
-                                                     visit_id=exercise.visit_id,
-                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+            self.viz.viz_finger_alternation(time_axis=alt_tap_x,
+                                            signals=alt_tap_y,
+                                            features=alt_tap_features,
+                                            p_id=p_id,
+                                            visit_id=exercise.visit_id,
+                                            ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
 
@@ -790,12 +795,12 @@ class ExerciseEvaluator:
         # plot visualization
         if save_plots and performance_features['extraction_status'] == 'success':
 
-            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_original'],
-                                                     features=performance_features,
-                                                     p_id=p_id,
-                                                     visit_id=exercise.visit_id,
-                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+            self.viz.viz_single_signal_exercises(time_axis=performance_features['time_axis'],
+                                                 signal=performance_features['signal_original'],
+                                                 features=performance_features,
+                                                 p_id=p_id,
+                                                 visit_id=exercise.visit_id,
+                                                 ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results
 
@@ -922,11 +927,11 @@ class ExerciseEvaluator:
         # plot visualization
         if save_plots and performance_features['extraction_status'] == 'success':
 
-            self.viz.viz_repetitive_binary_exercises(time_axis=performance_features['time_axis'],
-                                                     signal=performance_features['signal_original'],
-                                                     features=performance_features,
-                                                     p_id=p_id,
-                                                     visit_id=exercise.visit_id,
-                                                     ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
+            self.viz.viz_single_signal_exercises(time_axis=performance_features['time_axis'],
+                                                 signal=performance_features['signal_original'],
+                                                 features=performance_features,
+                                                 p_id=p_id,
+                                                 visit_id=exercise.visit_id,
+                                                 ex_id=f'{exercise.exercise_id}_{exercise.side_condition}')
 
         return results

@@ -697,21 +697,112 @@ class Visualizer:
     # ============================================================================= #
     #                            3) PARAMETER EXTRACTION                            #
     # ============================================================================= #
-    def viz_repetitive_binary_exercises(self, time_axis, signal, features,
-                                        p_id: str = '', visit_id: str = '', ex_id: str = ''):
+    def viz_finger_alternation(self, time_axis: list, signals: list, features: list,
+                               p_id: str = '', visit_id: str = '', ex_id: str = ''):
+        """
+        Visualizes the timeseries of the FingerAlternation exercise.
+        Plots the detrended signal with strict and near valleys to highlight the tapping capacity.
+
+        Args:
+            time_axis (list[np.ndarray]): Time values (x-axis).
+            signals (list[np.ndarray]): List of tapping signals for all fingers.
+            features (list[dict]): Output dictionary from 'extract_irregular_movements_parameters()'.
+            visit_id (str): Visit ID. Defaults to ''.
+            p_id (str): Participant identifier key. Defaults to ''.
+            ex_id (str): Experiment identifier key. Defaults to ''.
+
+        Returns:
+            None
+        """
+        fig, axes = plt.subplots(nrows=4, ncols=1, figsize=(16, 12), sharex=True)
+        alt_labels = ['Index', 'Middle', 'Ring', 'Pinky']
+
+        line_handles = []
+        line_labels = []
+
+        # t_axis is shared for all subplots
+        t_axis = time_axis[0] if isinstance(time_axis, list) else time_axis
+
+        for i, (curr_ax, sig, feat) in enumerate(zip(axes, signals, features)):
+            plot_sig = np.array(sig)
+            label_name = alt_labels[i]
+
+            # plot signal line
+            line_obj, = curr_ax.plot(t_axis, plot_sig, color='#43a2ca', linewidth=2, zorder=3)
+
+            # threshold lines and zones
+            curr_ax.axhspan(0.0, 0.10, facecolor='#e0f3db', alpha=1.0, zorder=1)  # strict
+            curr_ax.axhspan(0.10, 0.25, facecolor='#a8ddb5', alpha=1.0, zorder=1)  # near
+            curr_ax.axhline(0.10, color='black', linestyle=':', linewidth=1.0, zorder=2)  # strict
+            curr_ax.axhline(0.25, color='black', linestyle=':', linewidth=1.0, zorder=2)  # near
+
+            # plot hysteresis valleys
+            strict_idc = feat.get('hysteresis_strict', [])
+            near_idc = feat.get('hysteresis_near', [])
+
+            if len(strict_idc) > 0:
+                curr_ax.scatter(t_axis[strict_idc], plot_sig[strict_idc],
+                                marker='o', s=70, facecolor='#e0f3db', edgecolor='black', linewidth=1.5, zorder=4)
+            if len(near_idc) > 0:
+                curr_ax.scatter(t_axis[near_idc], plot_sig[near_idc],
+                                marker='o', s=70, facecolor='#a8ddb5', edgecolor='black', linewidth=1.5, zorder=4)
+
+            # y-axis formatting
+            curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=14)
+            curr_ax.set_ylim(-0.0, 0.65)
+            curr_ax.set_yticks(np.arange(0.0, 0.61, 0.1))
+
+            # print finger name centered on top of the graph
+            curr_ax.text(0.50, 0.97, label_name, transform=curr_ax.transAxes, verticalalignment='top',
+                         horizontalalignment='center', fontsize=16, fontweight='bold',
+                         bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=3), zorder=5)
+
+            # collect legend handles from first axis
+            if i == 0:
+                line_handles.append(line_obj)
+                line_labels.append('Tapping Distance')
+                custom_strict = Line2D([0], [0], marker='o', color='w', markerfacecolor='#e0f3db',
+                                       markeredgecolor='black', markersize=8)
+                custom_near = Line2D([0], [0], marker='o', color='w', markerfacecolor='#a8ddb5',
+                                     markeredgecolor='black', markersize=8)
+                line_handles.extend([custom_strict, custom_near])
+                line_labels.extend(['Strict Tapping (< 0.10)', 'Near Tapping (< 0.25)'])
+
+            curr_ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
+            curr_ax.spines['top'].set_visible(False)
+            curr_ax.spines['right'].set_visible(False)
+
+        axes[-1].set_xlabel('Time [s]', fontsize=14)
+
+        # title and legend
+        axes[0].set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=16, pad=45)
+        axes[0].legend(line_handles, line_labels, loc='lower center', bbox_to_anchor=(0.5, 1.05),
+                       ncol=3, frameon=False, fontsize=12)
+
+        plt.tight_layout()
+
+        # save the plot
+        suffix = '.png'
+        f_name: str = f'{p_id}-{visit_id}_{ex_id}_event_detection{suffix}'
+        f_path: str = os.path.join(self.features_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
+        plt.close(fig)
+
+    def viz_single_signal_exercises(self, time_axis, signal, features,
+                                    p_id: str = '', visit_id: str = '', ex_id: str = ''):
         """
         Visualizes the timeseries of the repetitive binary exercises:
         - FingerTapping (index finger tapping)
-        - FingerAlternation (fingertips to thumb fingertip)
         - HandOpening (hand opening and closing)
         - ProSup (pronation supination)
         Plots the detrended signal, marked peaks, marked valleys, and the zero-crossing baseline.
 
         Args:
-            time_axis (list | np.ndarray): Time values (x-axis).
-            signal (list | np.ndarray): The signal used for detection (usually the DETRENDED signal).
-            features (list | dict): Output dictionary from 'extract_irregular_movements_parameters'.
-            visit_id (str, optional): Visit ID. Defaults to ''.
+            time_axis (np.ndarray): Time values (x-axis).
+            signal (np.ndarray): The signal used for detection.
+            features (dict): Output dictionary from 'extract_irregular_movements_parameters'.
+            visit_id (str): Visit ID. Defaults to ''.
             p_id (str): Participant identifier key. Defaults to ''.
             ex_id (str): Experiment identifier key. Defaults to ''.
 
@@ -719,134 +810,75 @@ class Visualizer:
             None
         """
 
-        # helper function for color shades
         def adjust_lightness(color_in, amount):
             c = mc.to_rgb(color_in)
             c = colorsys.rgb_to_hls(*c)
             color_out = colorsys.hls_to_rgb(c[0], max(0, min(1, amount * c[1])), c[2])
             return color_out
 
-        # check input is a list of one or more signals
-        signals = signal if isinstance(signal, list) else [signal]
-        feature_list = features if isinstance(features, list) else [features]
+        # handle lists with a single element
         t_axis = time_axis[0] if isinstance(time_axis, list) else time_axis
+        plot_sig = np.array(signal[0] if isinstance(signal, list) else signal)
+        feat = features[0] if isinstance(features, list) else features
 
-        num_signals = len(signals)
+        fig, curr_ax = plt.subplots(figsize=(16, 6))
 
-        # dynamically scale figure height based on number of subplots
-        fig_heigth = 6 if num_signals == 1 else (3 * num_signals)
-        fig, axes = plt.subplots(nrows=num_signals, ncols=1, figsize=(16, fig_heigth), sharex=True)
+        color = '#43a2ca'
+        dark_color = adjust_lightness(color, amount=0.8)
+        light_color = adjust_lightness(color, amount=1.6)
 
-        # ensure axes is an iterable list
-        if num_signals == 1:
-            axes = [axes]
+        if 'ProSup' in ex_id:
+            plot_sig = plot_sig - np.mean(plot_sig)
 
-        # color palette
-        base_colors: list[str] = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        alt_labels: list[str] = ['Index', 'Middle', 'Ring', 'Pinky']
+        # plot the main signal
+        line_obj, = curr_ax.plot(t_axis, plot_sig, color=color, linewidth=1.5, alpha=0.7, zorder=2)
 
-        # pre-calculate shared y-limits for FingerAlternation
-        global_y_min, global_y_max = 0.0, 1.0
-        if 'FingerAlternation' in ex_id:
-            all_vals = np.concatenate(signals)
-            pad = (np.max(all_vals) - np.min(all_vals)) * 0.1
-            global_y_min = np.min(all_vals) - pad
-            global_y_max = np.max(all_vals) + pad
+        # plot valid peaks (dark up-triangle)
+        peak_indices = feat.get('valid_peaks_idx', [])
+        if len(peak_indices) > 0:
+            curr_ax.scatter(t_axis[peak_indices], plot_sig[peak_indices],
+                            marker='^', s=80, facecolor=dark_color, edgecolor='black', linewidth=0.8, zorder=3)
 
-        # collectors for the legend
-        line_handles = []
-        line_labels = []
+        # plot valid valleys (light down-triangle)
+        valley_indices = feat.get('valid_valleys_idx', [])
+        if len(valley_indices) > 0:
+            curr_ax.scatter(t_axis[valley_indices], plot_sig[valley_indices],
+                            marker='v', s=80, facecolor=light_color, edgecolor='black', linewidth=0.8, zorder=3)
 
-        for i, (curr_ax, sig, feat) in enumerate(zip(axes, signals, feature_list)):
-            color = base_colors[i % len(base_colors)]
-            dark_color = adjust_lightness(color, amount=0.8)    # 20% darker
-            light_color = adjust_lightness(color, amount=1.6)   # 60% lighter
+        # y-axis formatting and labels based on exercise
+        if 'ProSup' in ex_id:
+            curr_ax.set_ylabel('Rotation Angle [°] (Centered)', fontsize=12)
+            curr_ax.set_ylim(-150, 150)
+            curr_ax.set_yticks(np.arange(-150, 151, 30))
+        else:
+            curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
+            curr_ax.set_ylim(0.0, 1.0)
+            curr_ax.set_yticks(np.arange(0.0, 1.01, 0.2))
 
-            plot_sig = np.array(sig)
-            if 'ProSup' in ex_id:
-                plot_sig = plot_sig - np.mean(plot_sig)
+        curr_ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
+        curr_ax.spines['top'].set_visible(False)
+        curr_ax.spines['right'].set_visible(False)
+        curr_ax.set_xlabel('Time [s]', fontsize=12)
 
-            label_name = alt_labels[i] if len(signals) > 1 else ex_id
+        # legend
+        custom_peak = Line2D([0], [0], marker='^', color='w', markerfacecolor=dark_color, markeredgecolor='black',
+                             markersize=9)
+        custom_valley = Line2D([0], [0], marker='v', color='w', markerfacecolor=light_color, markeredgecolor='black',
+                               markersize=9)
 
-            # plot the main signal
-            line_obj, = curr_ax.plot(t_axis, plot_sig, color=color, linewidth=1.5, alpha=0.7, label=label_name, zorder=2)
-            line_handles.append(line_obj)
-            line_labels.append(label_name)
-
-            # plot valid peaks (dark up-triangle)
-            peak_indices = feat.get('valid_peaks_idx', [])
-            if len(peak_indices) > 0:
-                curr_ax.scatter(t_axis[peak_indices], plot_sig[peak_indices],
-                                marker='^', s=80, facecolor=dark_color, edgecolor='black', linewidth=0.8, zorder=3)
-
-            # plot valid valleys (light down-triangle)
-            valley_indices = feat.get('valid_valleys_idx', [])
-            if len(valley_indices) > 0:
-                curr_ax.scatter(t_axis[valley_indices], plot_sig[valley_indices],
-                                marker='v', s=80, facecolor=light_color, edgecolor='black', linewidth=0.8, zorder=3)
-
-            # exercise specific y-axis formatting
-            if 'FingerAlternation' in ex_id:
-                curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
-                curr_ax.set_ylim(global_y_min, global_y_max)
-            elif 'ProSup' in ex_id:
-                curr_ax.set_ylabel('Rotation Angle [°] (Centered)', fontsize=12)
-                curr_ax.set_ylim(-155, 155)
-                pro_sup_cfg = config.get('pro_sup', {})
-                peak_cfg = pro_sup_cfg.get('peak_cfg', {})
-                ticks: int = int(peak_cfg.get('min_prominence', 30))
-                curr_ax.set_yticks(np.arange(-150, 151, ticks))
-            else:
-                # 'FingerTapping' and 'HandOpening'
-                curr_ax.set_ylabel('Amplitude (Normalized)', fontsize=12)
-                curr_ax.set_ylim(-0.05, 1.05)
-                curr_ax.set_yticks(np.arange(0.0, 1.1, 0.2))
-
-            curr_ax.grid(True, linestyle=':', alpha=0.7, zorder=0)
-            curr_ax.spines['top'].set_visible(False)
-            curr_ax.spines['right'].set_visible(False)
-
-        # custom legend markers for peaks and valleys
-        custom_peak = Line2D([0], [0], marker='^', color='w', markerfacecolor='none',
-                             markeredgecolor='black', markersize=8,)
-        custom_valley = Line2D([0], [0], marker='v', color='w', markerfacecolor='none',
-                               markeredgecolor='black', markersize=8,)
-
-        # append to bottom of the line legend list
-        line_handles.extend([custom_peak, custom_valley])
-        line_labels.extend(['Peaks', 'Valleys'])
-
-        # place legend top-most axis
-        axes[0].legend(line_handles, line_labels, loc='upper left', bbox_to_anchor=(1.02, 0.5),
-                       ncol=1, frameon=True, fontsize=10)
-
-        # title on top axis, x-label on bottom axis
-        # layout and labels
-        axes[0].set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=14, pad=15)
-        axes[-1].set_xlabel('Time [s]', fontsize=12)
-
-        # add annotation for extracted metrics of the primary signal
-        prim_feat = feature_list[0]
-        metrics_text = (f"Reps: {prim_feat.get('repetition_num', 0):.1f} | "
-                        f"Freq: {prim_feat.get('repetition_freq', 0):.2f} Hz\n"
-                        f"Mean Amp: {prim_feat.get('amplitude_mean', 0):.2f} | "
-                        f"Mean Period: {prim_feat.get('period_mean', 0):.2f}s")
-
-        # position text above the legend
-        axes[0].text(1.02, 0.96, metrics_text, transform=axes[0].transAxes,
-                     verticalalignment='top', horizontalalignment='left',
-                     bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', alpha=0.9),
-                     fontsize=10, zorder=4)
+        # legend layout
+        curr_ax.set_title(f'{p_id}_{ex_id} - Event Detection', fontweight='bold', fontsize=16, pad=45)
+        curr_ax.legend([line_obj, custom_peak, custom_valley], [ex_id.split('_')[0], 'Peaks', 'Valleys'],
+                       loc='lower center', bbox_to_anchor=(0.5, 1.05), ncol=3, frameon=False, fontsize=12)
 
         plt.tight_layout()
 
-        # Save the plot
+        # save the plot
         suffix = '.png'
         f_name: str = f'{p_id}-{visit_id}_{ex_id}_event_detection{suffix}'
         f_path: str = os.path.join(self.features_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600, bbox_inches='tight')
-
         plt.close(fig)
 
     def feature_zscore_heatmap(self, feature_file_path: str) -> None:
