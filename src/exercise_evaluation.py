@@ -1,5 +1,4 @@
 # src/exercise_evaluation.py
-import pydoc
 
 # libraries
 import numpy as np
