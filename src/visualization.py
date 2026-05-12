@@ -928,35 +928,53 @@ class Visualizer:
             a_pivot = a_z.pivot_table(index='participant_visit', values=features).T
 
             # visualization
-            fig, axes = plt.subplots(ncols=2, figsize=(24, max(4, len(features) * 0.25)), sharey=True)
+            fig, axes = plt.subplots(ncols=3, figsize=(24, max(4, len(features) * 0.25)),
+                                     gridspec_kw={'width_ratios': [1, 1, 0.03], 'wspace': 0.1},
+                                     layout='constrained')
 
             # color map is caped to +/- 4 Standard Deviations
             vmin, vmax = -4.0, 4.0
             cmap = 'vlag'
 
-            # healthy heatmap
+            # healthy heatmap (axis[0])
             sns.heatmap(h_pivot, ax=axes[0], cmap=cmap, vmin=vmin, vmax=vmax, annot=False, fmt='.1f', linewidths=0.5,
                         cbar=False)
             axes[0].set_title(f'Healthy Hand ({ex_name})', fontsize=18, pad=15)
             axes[0].set_xlabel('Participant / Visit', fontsize=16, labelpad=10)
             axes[0].set_ylabel('Features', fontsize=16, labelpad=10)
-            axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45, ha='right', fontsize=12)
-            axes[0].tick_params(labelsize=16)
+            axes[0].tick_params(labelsize=12)
 
-            # affected heatmap
+            # format x-ticks to hide every 2nd label
+            axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45, ha='right', fontsize=12)
+            for i, tick in enumerate(axes[0].xaxis.get_major_ticks()):
+                if i % 2 != 0:
+                    tick.label1.set_visible(False)      # hides text
+                    tick.tick1line.set_visible(False)   # hides tick strokes
+
+            # affected heatmap (axis[1])
             sns.heatmap(a_pivot, ax=axes[1], cmap=cmap, vmin=vmin, vmax=vmax, annot=False, fmt='.1f', linewidths=0.5,
+                        cbar=True, cbar_ax=axes[2],
                         cbar_kws={'label': 'Z-Score (Standard Deviations from Healthy Mean)'})
+
             axes[1].set_title(f'Affected Hand ({ex_name})', fontsize=18, pad=15)
             axes[1].set_xlabel('Participant / Visit', fontsize=16, labelpad=10)
             axes[1].set_ylabel('', fontsize=16)
+
+            # manually clear y-axis ticks
+            axes[1].set_yticks([])
+            axes[1].tick_params(labelsize=12)
+
+            # format x-ticks to hide every 2nd label
             axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=45, ha='right', fontsize=12)
+            for i, tick in enumerate(axes[1].xaxis.get_major_ticks()):
+                if i % 2 != 0:
+                    tick.label1.set_visible(False)      # hides text
+                    tick.tick1line.set_visible(False)   # hides tick strokes
 
             # format colorbar
-            cbar = axes[1].collections[0].colorbar
-            cbar.ax.tick_params(labelsize=12)
-            cbar.set_label('Z-Score (Standard Deviations from Healthy Mean)', size=16, labelpad=10)
-
-            plt.tight_layout()
+            axes[2].tick_params(labelsize=12)
+            axes[2].yaxis.label.set_size(16)
+            axes[2].yaxis.labelpad = 10
 
             suffix = '.png'
             f_name: str = f'all_extracted_features_heatmap_{ex_name}' + suffix
@@ -1377,7 +1395,7 @@ class Visualizer:
         plt.figure(figsize=(12, 10))
 
         sns.heatmap(matrix_data, mask=mask, cmap='coolwarm', vmin=0, vmax=1, xticklabels=labels, yticklabels=labels,
-                    annot=False, square=True, linewidths=.5, fmt='.2f')
+                    annot=True, square=True, linewidths=.5, fmt='.2f')
 
         plt.title(f'Spearman Correlation Matrix - {ex_name}', fontsize=16)
         plt.tight_layout()

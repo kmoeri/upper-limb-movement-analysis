@@ -541,7 +541,7 @@ class ExerciseEvaluator:
 
             # task-independent features
             'alt_tap_synergy': synergy_score,
-            'alt_tap_mean_volume': mean_volume,
+            'alt_tap_average_volume': mean_volume,
 
             # task-dependent features
             'alt_tap_contrib_ratio': contrib_ratio,
@@ -839,8 +839,7 @@ class ExerciseEvaluator:
         active_rom_score = (np.sum(tot_active_rom > tot_active_rom_thresh) / len(tot_active_rom) * 100) if len(tot_active_rom) > 0 else 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between rotations), stability (out-of-plane compensation)
-        # 1.3.1) calculate the rotation rhythm with CoV
-        rotation_cov: float = active_dist_dict.get('period_cov', 0.0)
+        # 1.3.1) the rotation rhythm is already given by the period CoV
 
         # 1.3.2) calculate the rotation stability - the larger the values of the other euler angles, the lower the score
         x_stability_score: float = float(np.std(euler_x))
@@ -912,8 +911,6 @@ class ExerciseEvaluator:
             'pro_sup_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
             # correctness of pronation & supination(completeness of movement)
             'pro_sup_active_rom_score': active_rom_score,
-            # rhythm with CoV (period time between rotations)
-            'pro_sup_rot_cov': rotation_cov,
             # rotation stability
             'pro_sup_isolation': total_comp_movement,
             # spectral entropy (smoothness)

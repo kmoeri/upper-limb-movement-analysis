@@ -72,7 +72,19 @@ def run_feature_reduction():
         df_ex = df[ex_mask].copy()
 
         # isolate numeric feature columns (excluding metadata)
-        numeric_cols: list[str] = [col for col in df_ex.columns if col not in meta_cols]
+        num_cols: list[str] = [col for col in df_ex.columns if col not in meta_cols]
+
+        # only consider the features of the current exercise
+        if ex_name == 'FingerTapping':
+            numeric_cols = [col for col in num_cols if col.startswith('idx_tap')]
+        elif ex_name == 'FingerAlternation':
+            numeric_cols = [col for col in num_cols if col.startswith('alt_tap')]
+        elif ex_name == 'HandOpening':
+            numeric_cols = [col for col in num_cols if col.startswith('open_close')]
+        elif ex_name == 'ProSup':
+            numeric_cols = [col for col in num_cols if col.startswith('pro_sup')]
+        else:
+            raise ValueError('\nError: Invalid Exercise Name.')
 
         # A) drop zero-variance features
         low_var_cols: list = []
@@ -88,7 +100,7 @@ def run_feature_reduction():
             df.loc[ex_mask, low_var_cols] = np.nan
 
         # B) calculate Spearman correlation matrix
-        corr_matrix = df[numeric_cols].corr(method='spearman').abs()
+        corr_matrix = df_ex[numeric_cols].corr(method='spearman').abs()
 
         # C) visualize and safe heatmap
         mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
