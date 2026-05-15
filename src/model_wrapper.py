@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 
 class ModelWrapper:
-    def __init__(self, model_type: str = 'xgboost', task_type: str = 'classification', n_trials: int = 30):
+    def __init__(self, model_type: str = 'catboost', task_type: str = 'classification', n_trials: int = 30):
         """
         model_algo: 'xgboost', 'catboost', or 'rf'
         task_type: 'classification' or 'regression'

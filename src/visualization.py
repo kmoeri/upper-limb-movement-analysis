@@ -2,6 +2,7 @@
 
 # libraries
 import os
+import shap
 import colorsys
 import numpy as np
 import pandas as pd
@@ -12,7 +13,6 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.animation as animation
 from matplotlib.lines import Line2D
-from pandas import pivot
 from scipy import stats
 
 # modules
@@ -1406,4 +1406,92 @@ class Visualizer:
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600)
 
+        plt.close()
+
+    @staticmethod
+    def viz_regression_identity_plot(df: pd.DataFrame, model_algo: str, res_subdir: str) -> None:
+
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(data=df, x='Real_Score', y='Predicted_Score', hue='Target', s=80, alpha=0.7)
+
+        # prediction line
+        min_val: float = float(min(df['Real_Score'].min(), df['Predicted_Score'].min()))* 0.9
+        max_val: float = float(min(df['Real_Score'].max(), df['Predicted_Score'].max())) * 1.1
+        plt.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5, label='Perfect Prediction (y=x)')
+
+        # figure layout
+        plt.title(f'Real vs. Predicted Jebson Taylor Score ({model_algo.upper()})', fontsize=18)
+        plt.xlabel('Real Log-Ratio (Stopwatch)', fontsize=16)
+        plt.ylabel('Predicted Log-Ratio (Kinematics)', fontsize=16)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+
+        # save figure
+        plt.savefig(os.path.join(res_subdir, f'{model_algo}_identity_plot_subtests.png'), dpi=600)
+        plt.close()
+
+    @staticmethod
+    def viz_regression_bland_altman(df: pd.DataFrame, model_algo: str, res_subdir: str) -> None:
+
+        mean_scores = (df['Real_Score'] + df['Predicted_Score']) / 2
+        diff_scores = df['Predicted_Score'] - df['Real_Score']
+
+        bias = diff_scores.mean()
+        std_diff = diff_scores.std()
+        upper_loa = bias + 1.96 * std_diff
+        lower_loa = bias - 1.96 * std_diff
+
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(x=mean_scores, y=diff_scores, hue=df['Severity_Class'], s=100, palette='viridis')
+
+        # horizontal bias and thresh
+        plt.axhline(bias, color='black', linestyle='-', linewidth=2, label=f'Bias: {bias:.3f}')
+        plt.axhline(upper_loa, color='red', linestyle='--', label=f'+1.96 SD: {upper_loa:.3f}')
+        plt.axhline(lower_loa, color='red', linestyle='--', label=f'-1.96 SD: {lower_loa:.3f}')
+
+        # figure layout
+        plt.title(f'Bland-Altman Plot: Jebson Taylor - Total Asymmetry ({model_algo.upper()})', fontsize=16)
+        plt.xlabel('Average of Real and Predicted Score', fontsize=14)
+        plt.ylabel('Difference (Predicted - Real)', fontsize=14)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        # save figure
+        plt.savefig(os.path.join(res_subdir, f'{model_algo}_bland_altman.png'), dpi=600)
+        plt.close()
+
+    @staticmethod
+    def viz_regression_shap_bar(df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+                                model_algo: str, f_path: str) -> None:
+
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols,
+                          plot_type='bar', show=False)
+
+        target_exercise_name: str = os.path.basename(f_path).split('_')[-1].split('.')[0]
+        plt.title(f'SHAP Global Feature Importance: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
+        plt.tight_layout()
+
+        # save plot
+        out_path: str = os.path.dirname(f_path)
+        f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
+        plt.savefig(os.path.join(out_path, f_basename), dpi=600)
+        plt.close()
+
+    @staticmethod
+    def viz_regression_shap_beeswarm(df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+                                     model_algo: str, f_path: str) -> None:
+
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols, show=False)
+
+        target_exercise_name: str = os.path.basename(f_path).split('_')[-1].split('.')[0]
+        plt.title(f'SHAP Feature Impact: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
+        plt.tight_layout()
+
+        # save plot
+        out_path: str = os.path.dirname(f_path)
+        f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
+        plt.savefig(os.path.join(out_path, f_basename), dpi=600)
         plt.close()
