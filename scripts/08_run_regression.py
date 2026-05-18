@@ -180,7 +180,9 @@ def run_regression_pipeline():
             print(f'\nTraining Ensemble for: {target_col} ... ')
 
             # select method to use: 'catboost', 'xgb' or 'rf'
-            ensemble = EnsembleManager(model_type=model_algo, task_type='regression', n_trials=30)
+            ensemble = EnsembleManager(model_type=model_algo,
+                                       task_type='regression',
+                                       n_trials=config['regression']['optuna_n_trials'])
 
             # call inner- and outer-loop cross validation function; returns validation results and SHAP values
             df_oof, df_shap, df_feat = ensemble.train_with_nested_cv(df_master, feature_cols, target_col, baseline_visit, n_splits=5)

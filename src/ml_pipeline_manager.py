@@ -294,7 +294,7 @@ class EnsembleManager:
                 shap_values_lst.append(p_shap)
                 shap_features_lst.append(p_feat)
 
-                print(f'Participant ID: {pid} | Real Score: {real_score} | '
+                print(f'Participant ID: {pid} | Real Score: {real_score:.2f} | '
                       f'Predicted Score: {predicted_score:.2f} | Used: {len(df_visit)} exercises.')
 
         # compile the OOF result DataFrame

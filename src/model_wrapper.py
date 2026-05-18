@@ -77,16 +77,23 @@ class ModelWrapper:
             params['max_depth'] = trial.suggest_int('max_depth', 2, 6)              # keep low to prevent overfitting
             params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True)
             params['subsample'] = trial.suggest_float('subsample', 0.6, 1.0)
+            params['min_child_weight'] = trial.suggest_int('min_child_weight', 1, 5)
+            params['colsample_bytree'] = trial.suggest_float('colsample_bytree', 0.5, 1.0)
+            params['reg_lambda'] = trial.suggest_float('reg_lambda', 0.1, 10.0, log=True)
 
         elif self.model_type == 'catboost':
             params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300)
             params['depth'] = trial.suggest_int('depth', 2, 6)
             params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True)
+            params['l2_leaf_reg'] = trial.suggest_float('l2_leaf_reg', 0.1, 10.0, log=True)
+            params['colsample_bylevel'] = trial.suggest_float('colsample_bylevel', 0.5, 1.0)
 
         elif self.model_type == 'rf':
-            params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300)
+            params['n_estimators'] = trial.suggest_int('n_estimators', [300, 500, 1000])
             params['max_depth'] = trial.suggest_int('max_depth', 2, 6)
             params['min_samples_split'] = trial.suggest_int('min_samples_split', 2, 10)
+            params['min_samples_leaf'] = trial.suggest_int('min_samples_leaf', 1, 4)
+            params['max_features'] = trial.suggest_float('max_features', ['sqrt', 'log2', None])
 
         # evaluation using GroupKFold
         gkf = GroupKFold(n_splits=4)
