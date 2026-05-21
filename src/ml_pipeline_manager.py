@@ -4,7 +4,7 @@
 import pandas as pd
 import numpy as np
 import shap
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, GroupKFold
 
 # modules
 from src.config import config
@@ -194,8 +194,11 @@ class EnsembleManager:
             explainer = shap.TreeExplainer(model.final_model)
             shap_vals = explainer.shap_values(X_reduced)
 
+            # handle varying SHAP output formats
             if isinstance(shap_vals, list):
                 shap_vals = shap_vals[1]
+            elif len(shap_vals.shape) == 3:
+                shap_vals = shap_vals[:, :, 1]
 
             # apply ensemble weight to the SHAP values
             weighted_shap = shap_vals[0] * weight
@@ -225,28 +228,37 @@ class EnsembleManager:
             tuple: (OOF predictions for all patients, SHAP value DataFrame, SHAP feature DataFrame).
         """
 
-        # create dynamic severity bins based strictly on the baseline visit (T1) -> mild, moderate, and severe
+        # splitting logic to handle classification and regression differently
 
-        # baseline visit data
-        df_baseline: pd.DataFrame = df[df['visit_ID'] == baseline_visit].drop_duplicates(subset=['p_ID']).copy()
+        if self.task_type == 'regression':
+            # baseline visit data
+            df_baseline: pd.DataFrame = df[df['visit_ID'] == baseline_visit].drop_duplicates(subset=['p_ID']).copy()
 
-        # create 3 equally sized percentiles with "qcut"
-        df_baseline['severity_bin'] = pd.qcut(df_baseline[target_col], q=3, labels=['Mild', 'Moderate', 'Severe'])
+            # create 3 equally sized percentiles with "qcut"
+            df_baseline['severity_bin'] = pd.qcut(df_baseline[target_col], q=3, labels=['Mild', 'Moderate', 'Severe'])
 
-        # map the bins back to the main dataframe
-        bin_mapping = dict(zip(df_baseline['p_ID'], df_baseline['severity_bin']))
-        df['severity_bin'] = df['p_ID'].map(bin_mapping)
+            # map the bins back to the main dataframe
+            bin_mapping = dict(zip(df_baseline['p_ID'], df_baseline['severity_bin']))
+            df['severity_bin'] = df['p_ID'].map(bin_mapping)
 
-        # drop any participants that lack a baseline visit
-        df = df.dropna(subset=['severity_bin']).copy()
+            # drop any participants that lack a baseline visit
+            df = df.dropna(subset=['severity_bin']).copy()
 
-        # setup stratified group k-fold
-        sgkf = StratifiedGroupKFold(n_splits=n_splits)
+            X = df[feature_cols]
+            y = df['severity_bin']
+            groups = df['p_ID']
 
-        groups = df['p_ID']
-        X = df[feature_cols]
-        y = df[target_col]
-        bins = df['severity_bin']
+            cv_splitter = StratifiedGroupKFold(n_splits=n_splits)
+            split_iterator = cv_splitter.split(X, y=df['severity_bin'], groups=groups)
+
+        else:
+            # classification - naturally balanced group as each participant has a healthy and an affected side
+            X = df[feature_cols]
+            y = df[target_col]
+            groups = df['p_ID']
+
+            cv_splitter = GroupKFold(n_splits=n_splits)
+            split_iterator = cv_splitter.split(X, y=y, groups=groups)
 
         # list definition to store the oof results and SHAP results
         oof_results_lst: list = []
@@ -254,7 +266,7 @@ class EnsembleManager:
         shap_features_lst: list = []
 
         # nested cross-validation loop
-        for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y=bins, groups=groups)):
+        for fold, (train_idx, val_idx) in enumerate(split_iterator):
             print(f'\nFold {fold + 1}/{n_splits}')
 
             # df_train_fold contains all visits (T1, T2, and T3) for the training folds (e.g., 20 participants)
@@ -267,8 +279,18 @@ class EnsembleManager:
             # 2) filter the validation fold to only use baseline data
             df_val_baseline = df_val_fold[df_val_fold['visit_ID'] == baseline_visit].copy()
 
-            # 3) predict the baseline OOF scores and extract SHAP
-            for pid, df_visit in df_val_baseline.groupby('p_ID'):
+            # 3) grouping logic (separate limbs for classification)
+            group_keys = ['p_ID', 'side_focus'] if self.task_type == 'classification' else ['p_ID']
+
+            # 4) predict the baseline OOF scores and extract SHAP
+            for keys, df_visit in df_val_baseline.groupby(group_keys):
+
+                if self.task_type == 'classification':
+                    pid = keys[0]
+                    side = keys[1]
+                else:
+                    pid = keys[0] if isinstance(keys, tuple) else keys
+                    side = 'Ratio'
 
                 # get the groundtruth score
                 real_score = df_visit[target_col].iloc[0]
@@ -280,13 +302,21 @@ class EnsembleManager:
                     continue
 
                 # append current results
-                oof_results_lst.append({'Target': target_col,
-                                        'p_ID': pid,
-                                        'Real_Score': real_score,
-                                        'Predicted_Score': round(predicted_score, 3),
-                                        'Error': round(abs(float(real_score - predicted_score)), 3),
-                                        'Severity_Class': df_visit['severity_bin'].iloc[0],
-                                        'Exercises_Used': list(df_visit['ex_name'].unique())})
+                if self.task_type == 'regression':
+                    oof_results_lst.append({'Target': target_col,
+                                            'p_ID': pid,
+                                            'Real_Score': real_score,
+                                            'Predicted_Score': round(predicted_score, 3),
+                                            'Error': round(abs(float(real_score - predicted_score)), 3),
+                                            'Severity_Class': df_visit['severity_bin'].iloc[0],
+                                            'Exercises_Used': list(df_visit['ex_name'].unique())})
+                else:
+                    # classification
+                    oof_results_lst.append({'p_ID': pid,
+                                            'Side': side,
+                                            'Real_Score': real_score,
+                                            'Predicted_Score': round(predicted_score, 3),
+                                            'Exercises_Used': list(df_visit['ex_name'].unique())})
 
                 # attach tracking metadata to dictionaries
                 p_shap['p_ID'] = pid

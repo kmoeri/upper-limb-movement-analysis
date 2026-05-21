@@ -14,6 +14,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.animation as animation
 from matplotlib.lines import Line2D
 from scipy import stats
+from sklearn.metrics import confusion_matrix
 
 # modules
 from src.config import config, project_path
@@ -39,6 +40,9 @@ class Visualizer:
         # kinematics quality check results directory (child)
         self.kinematics_quality_res_path = os.path.join(self.results_path, '05_kinematics_quality')
         os.makedirs(self.kinematics_quality_res_path, exist_ok=True)
+        # regression results directory (child)
+        self.regression_res_path = os.path.join(self.results_path, '06_regression')
+        os.makedirs(self.regression_res_path, exist_ok=True)
 
         # video frame rate
         self.fps = config['camera_param']['fps']
@@ -1388,7 +1392,7 @@ class Visualizer:
         plt.close(fig)
 
     # ============================================================================= #
-    #                           5) Classification / Regression                      #
+    #                           5) CLASSIFICATION                                   #
     # ============================================================================= #
     def corr_matrix_heatmap(self, matrix_data: pd.DataFrame, mask: np.ndarray, ex_name: str, labels: list[str]) -> None:
 
@@ -1408,15 +1412,35 @@ class Visualizer:
 
         plt.close()
 
-    @staticmethod
-    def viz_regression_identity_plot(df: pd.DataFrame, model_algo: str, res_subdir: str) -> None:
+    def viz_classification_confusion_matrix(self, df: pd.DataFrame, model_algo: str) -> None:
+
+        plt.figure(figsize=(6, 5))
+        cm = confusion_matrix(df['Real_Score'], (df['Predicted_Score'] > 0.5).astype('int'))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
+                    xticklabels=['Healthy (0)', 'Affected (1)'],
+                    yticklabels=['Healthy (0)', 'Affected (1)'],)
+
+        # figure labels
+        plt.title(f'Confusion Matrix ({model_algo.upper()})', fontsize=18)
+        plt.xlabel('Predicted Label')
+        plt.ylabel('True Label')
+
+        # save figure
+        model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_classification')
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_confusion_matrix.png'), dpi=600)
+        plt.close()
+
+    # ============================================================================= #
+    #                           6) REGRESSION                                       #
+    # ============================================================================= #
+    def viz_regression_identity_plot(self, df: pd.DataFrame, model_algo: str) -> None:
 
         plt.figure(figsize=(10, 8))
         sns.scatterplot(data=df, x='Real_Score', y='Predicted_Score', hue='Target', s=80, alpha=0.7)
 
         # prediction line
-        min_val: float = float(min(df['Real_Score'].min(), df['Predicted_Score'].min()))* 0.9
-        max_val: float = float(min(df['Real_Score'].max(), df['Predicted_Score'].max())) * 1.1
+        min_val: float = float(min(df['Real_Score'].min(), df['Predicted_Score'].min())) * 0.9
+        max_val: float = float(max(df['Real_Score'].max(), df['Predicted_Score'].max())) * 1.1
         plt.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5, label='Perfect Prediction (y=x)')
 
         # figure layout
@@ -1427,11 +1451,11 @@ class Visualizer:
         plt.tight_layout()
 
         # save figure
-        plt.savefig(os.path.join(res_subdir, f'{model_algo}_identity_plot_subtests.png'), dpi=600)
+        model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_identity_plot_subtests.png'), dpi=600)
         plt.close()
 
-    @staticmethod
-    def viz_regression_bland_altman(df: pd.DataFrame, model_algo: str, res_subdir: str) -> None:
+    def viz_regression_bland_altman(self, df: pd.DataFrame, model_algo: str) -> None:
 
         mean_scores = (df['Real_Score'] + df['Predicted_Score']) / 2
         diff_scores = df['Predicted_Score'] - df['Real_Score']
@@ -1458,40 +1482,49 @@ class Visualizer:
         plt.tight_layout()
 
         # save figure
-        plt.savefig(os.path.join(res_subdir, f'{model_algo}_bland_altman.png'), dpi=600)
+        model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_bland_altman.png'), dpi=600)
         plt.close()
 
-    @staticmethod
-    def viz_regression_shap_bar(df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
-                                model_algo: str, f_path: str) -> None:
+    def viz_regression_shap_bar(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+                                model_algo: str, f_path: str, task_type: str) -> None:
 
         plt.figure(figsize=(10, 6))
         shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols,
                           plot_type='bar', show=False)
 
-        target_exercise_name: str = os.path.basename(f_path).split('_')[-1].split('.')[0]
+        target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
         plt.title(f'SHAP Global Feature Importance: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
         plt.tight_layout()
 
         # save plot
-        out_path: str = os.path.dirname(f_path)
+        if task_type == 'classification':
+            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+        else:
+            # regression
+            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+
         f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
-        plt.savefig(os.path.join(out_path, f_basename), dpi=600)
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600)
         plt.close()
 
-    @staticmethod
-    def viz_regression_shap_beeswarm(df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
-                                     model_algo: str, f_path: str) -> None:
+    def viz_regression_shap_beeswarm(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+                                     model_algo: str, f_path: str, task_type: str) -> None:
 
         plt.figure(figsize=(10, 6))
         shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols, show=False)
 
-        target_exercise_name: str = os.path.basename(f_path).split('_')[-1].split('.')[0]
+        target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
         plt.title(f'SHAP Feature Impact: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
         plt.tight_layout()
 
         # save plot
-        out_path: str = os.path.dirname(f_path)
+        if task_type == 'classification':
+            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+        else:
+            # regression
+            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+
         f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
-        plt.savefig(os.path.join(out_path, f_basename), dpi=600)
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600)
         plt.close()

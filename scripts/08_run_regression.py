@@ -9,6 +9,7 @@ from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_err
 
 # modules
 from src.config import config, project_path
+from src.utils import ToolBox
 from src.visualization import Visualizer
 from src.ml_pipeline_manager import EnsembleManager
 from src.reference_scores import get_target_score_for_regression
@@ -32,7 +33,7 @@ def calc_asymmetry_ratios(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataF
     return df_final
 
 
-def calc_metrics(df: pd.DataFrame) -> dict:
+def calc_regression_metrics(df: pd.DataFrame) -> dict:
     y_true = df['Real_Score']
     y_pred = df['Predicted_Score']
 
@@ -53,96 +54,45 @@ def calc_metrics(df: pd.DataFrame) -> dict:
             'Acc_CI_lower': ci_lower, 'Acc_CI_upper': ci_upper}
 
 
-def evaluate_models():
+def evaluate_regression_models(res_dir: str) -> None:
 
     # initialize Visualizer
     viz: Visualizer = Visualizer()
 
-    res_dir: str = os.path.join(project_path, 'data', '05_results', '06_regression')
-    res_fpaths: list[str] = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
-                             if f.startswith('catboost') or f.startswith('xgboost') or f.startswith('rf')]
+    # get the model algo name (catboost, xgboost, rf)
+    model_algo: str = os.path.basename(res_dir).split('_')[0]
 
-    # perform for each algorithm (catboost, xgboost, rf) with results
-    for res_fpath in res_fpaths:
-        model_algo: str = os.path.basename(res_fpath).split('_')[0]
+    # master metrics table
+    oof_file_lst = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
+                    if f.startswith(f'{model_algo}_predictions_') and f.endswith('.csv')]
 
-        # master metrics table
-        oof_file_lst = [os.path.join(res_fpath, f) for f in os.listdir(res_fpath)
-                        if f.startswith(f'{model_algo}_predictions_') and f.endswith('.csv')]
+    metrics_lst = []
+    df_all_subtests: pd.DataFrame = pd.DataFrame()
 
-        metrics_lst = []
-        df_all_subtests: pd.DataFrame = pd.DataFrame()
+    for file in oof_file_lst:
+        df = pd.read_csv(file)
+        target = df['Target'].iloc[0]
+        metrics = calc_regression_metrics(df)
+        metrics['Target'] = target
+        metrics_lst.append(metrics)
 
-        for file in oof_file_lst:
-            df = pd.read_csv(file)
-            target = df['Target'].iloc[0]
-            metrics = calc_metrics(df)
-            metrics['Target'] = target
-            metrics_lst.append(metrics)
+        if 'Total' not in target:
+            df_all_subtests = pd.concat([df_all_subtests, df])
+        else:
+            df_total = df.copy()
 
-            if 'Total' not in target:
-                df_all_subtests = pd.concat([df_all_subtests, df])
-            else:
-                df_total = df.copy()
+    metrics_df = pd.DataFrame(metrics_lst)
+    print('\nMaster Metrics Table:')
+    print(metrics_df.round(3).to_string(index=False))
+    metrics_df.to_csv(os.path.join(res_dir, f'{model_algo}_metrics.csv'))
 
-        metrics_df = pd.DataFrame(metrics_lst)
-        print('\nMaster Metrics Table:')
-        print(metrics_df.round(3).to_string(index=False))
-        metrics_df.to_csv(os.path.join(res_fpath, f'{model_algo}_metrics.csv'))
+    # create identity plot (all subtests)
+    if not df_all_subtests.empty:
+        viz.viz_regression_identity_plot(df_all_subtests, model_algo)
 
-        # create identity plot (all subtests)
-        if not df_all_subtests.empty:
-            viz.viz_regression_identity_plot(df_all_subtests, model_algo, res_fpath)
-
-        # create bland-altman plot (total score)
-        if 'df_total' in locals():
-            viz.viz_regression_bland_altman(df_total, model_algo, res_fpath)
-
-
-def evaluate_shap():
-
-    # initialize Visualizer
-    viz: Visualizer = Visualizer()
-
-    res_dir: str = os.path.join(project_path, 'data', '05_results', '06_regression')
-    res_fpaths: list[str] = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
-                             if f.startswith('catboost') or f.startswith('xgboost') or f.startswith('rf')]
-
-    # perform for each algorithm (catboost, xgboost, rf) with results
-    for res_fpath in res_fpaths:
-        model_algo: str = os.path.basename(res_fpath).split('_')[0]
-
-        # shap value files
-        shap_vals_file_lst = [os.path.join(res_fpath, f) for f in os.listdir(res_fpath)
-                              if f.startswith(f'{model_algo}_shap_vals_') and f.endswith('.csv')]
-
-        if not shap_vals_file_lst:
-            return
-
-        # loop for each exercise
-        for shap_vals_file in sorted(shap_vals_file_lst):
-
-            # for every shap_vals file there is a corresponding shap_feats file
-            shap_feats_file = shap_vals_file.replace('vals', 'feats')
-
-            df_shap: pd.DataFrame = pd.read_csv(shap_vals_file)
-            df_feat: pd.DataFrame = pd.read_csv(shap_feats_file)
-
-            # clean IDs before plotting
-            if 'p_ID' in df_shap.columns:
-                df_shap = df_shap.drop(columns=['p_ID'])
-            if 'p_ID' in df_feat.columns:
-                df_feat = df_feat.drop(columns=['p_ID'])
-
-            # ensure alignment
-            common_cols = df_shap.columns.tolist()
-            df_feat = df_feat[common_cols].fillna(df_feat[common_cols].median()).fillna(0)
-
-            # plot global importance as bar plot
-            viz.viz_regression_shap_bar(df_shap, df_feat, common_cols, model_algo, shap_vals_file)
-
-            # plot impact direction as beeswarm plot
-            viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file)
+    # create bland-altman plot (total score)
+    if 'df_total' in locals():
+        viz.viz_regression_bland_altman(df_total, model_algo)
 
 
 def run_regression_pipeline():
@@ -239,10 +189,11 @@ def run_regression_pipeline():
         print(f'\nRegression results directory already exist. Regression was skipped.')
 
     print(f'\nEvaluating models ...')
-    evaluate_models()
+    evaluate_regression_models(out_dir)
 
     print(f'\nEvaluating SHAP ...')
-    evaluate_shap()
+    tb: ToolBox = ToolBox()
+    tb.evaluate_shap(out_dir)
 
     print(f'\nEvaluation was successful. Results saved.')
 

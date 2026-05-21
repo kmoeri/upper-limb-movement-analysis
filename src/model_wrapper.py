@@ -73,27 +73,27 @@ class ModelWrapper:
 
         params: dict = {}
         if self.model_type == 'xgboost':
-            params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300)
-            params['max_depth'] = trial.suggest_int('max_depth', 2, 6)              # keep low to prevent overfitting
-            params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True)
-            params['subsample'] = trial.suggest_float('subsample', 0.6, 1.0)
+            params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300) # number of trees in the model
+            params['max_depth'] = trial.suggest_int('max_depth', 2, 6)  # keep low to prevent overfitting (lower complexity)
+            params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True) # controls the step size for the optimizer
+            params['subsample'] = trial.suggest_float('subsample', 0.6, 1.0)    # controls the fraction of observations used for each tree
             params['min_child_weight'] = trial.suggest_int('min_child_weight', 1, 5)
-            params['colsample_bytree'] = trial.suggest_float('colsample_bytree', 0.5, 1.0)
-            params['reg_lambda'] = trial.suggest_float('reg_lambda', 0.1, 10.0, log=True)
+            params['colsample_bytree'] = trial.suggest_float('colsample_bytree', 0.5, 1.0)  # controls the fraction of features used for each tree
+            params['reg_lambda'] = trial.suggest_float('reg_lambda', 0.1, 10.0, log=True)   # L2 regularization on weights
 
         elif self.model_type == 'catboost':
-            params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300)
-            params['depth'] = trial.suggest_int('depth', 2, 6)
-            params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True)
-            params['l2_leaf_reg'] = trial.suggest_float('l2_leaf_reg', 0.1, 10.0, log=True)
-            params['colsample_bylevel'] = trial.suggest_float('colsample_bylevel', 0.5, 1.0)
+            params['n_estimators'] = trial.suggest_int('n_estimators', 50, 300) # number of trees in the model
+            params['depth'] = trial.suggest_int('depth', 2, 6)  # keep low to prevent overfitting (lower complexity)
+            params['learning_rate'] = trial.suggest_float('learning_rate', 0.01, 0.2, log=True)  # controls the step size for the optimizer
+            params['colsample_bylevel'] = trial.suggest_float('colsample_bylevel', 0.5, 1.0)  # controls the fraction of features used for each tree
+            params['l2_leaf_reg'] = trial.suggest_float('l2_leaf_reg', 0.1, 10.0, log=True) # L2 regularization on weights
 
         elif self.model_type == 'rf':
-            params['n_estimators'] = trial.suggest_int('n_estimators', [300, 500, 1000])
-            params['max_depth'] = trial.suggest_int('max_depth', 2, 6)
-            params['min_samples_split'] = trial.suggest_int('min_samples_split', 2, 10)
-            params['min_samples_leaf'] = trial.suggest_int('min_samples_leaf', 1, 4)
-            params['max_features'] = trial.suggest_float('max_features', ['sqrt', 'log2', None])
+            params['n_estimators'] = trial.suggest_categorical('n_estimators', [300, 500, 1000]) # number of trees in the model
+            params['max_depth'] = trial.suggest_int('max_depth', 2, 6)  # keep low to prevent overfitting (lower complexity)
+            params['min_samples_split'] = trial.suggest_int('min_samples_split', 2, 10) # minimum samples required at a node to trigger a split
+            params['min_samples_leaf'] = trial.suggest_int('min_samples_leaf', 1, 4)    # samples required in final leaf node
+            params['max_features'] = trial.suggest_categorical('max_features', ['sqrt', 'log2', None])    # maximum number of features considered by each tree
 
         # evaluation using GroupKFold
         gkf = GroupKFold(n_splits=4)
@@ -131,14 +131,14 @@ class ModelWrapper:
 
         print(f'Training {self.model_type.upper()} ({self.task_type}) on {len(X.columns)} features ...')
 
-        # 1) Hyperparameter Tuning (optuna)
+        # 1) hyperparameter tuning with optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         study = optuna.create_study(direction='minimize')
         study.optimize(lambda trial: self._optuna_objective(trial, X, y, groups), n_trials=self.n_trials)
         self.best_params = study.best_params
         self.study_best_value = study.best_value
 
-        # 2) SHAP Feature reduction
+        # 2) SHAP feature reduction
         # train model on all features
         interim_model = self._get_estimator(self.best_params)
         interim_model.fit(X, y)
@@ -149,7 +149,9 @@ class ModelWrapper:
         # classification may return list of arrays; regression usually returns one array
         shap_values = explainer.shap_values(X)
         if isinstance(shap_values, list):
-            shap_values = shap_values[1]    # get class 1
+            shap_values = shap_values[1]        # get class 1 from 2D arrays [class_0, class_1]
+        elif len(shap_values.shape) == 3:
+            shap_values = shap_values[:, :, 1]  # random forest may return 3D arrays (n_samples, n_features, n_classes)
 
         # calculate mean absolute SHAP value per feature
         mean_abs_shap = np.abs(shap_values).mean(axis=0)
@@ -160,7 +162,7 @@ class ModelWrapper:
         self.selected_features = shap_importance['feature'].head(max_features).tolist()
         print(f'Top {max_features} features selected via SHAP: {self.selected_features}')
 
-        # 3) Final Model Fit
+        # 3) final model fit
         # refit the final model on best features
         X_reduced = X[self.selected_features]
         self.final_model = self._get_estimator(self.best_params)

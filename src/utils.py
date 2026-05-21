@@ -10,14 +10,13 @@ import pandas as pd
 from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
-from plotly.graph_objs.indicator.gauge import axis
 from scipy.signal import savgol_filter, butter, filtfilt, ShortTimeFFT
 from scipy.spatial.transform import Rotation
 
 # modules
 from src.config import config
-from src.core import Participant
 from src.core import Exercise
+from src.visualization import Visualizer
 
 
 class ToolBox:
@@ -953,36 +952,77 @@ class ToolBox:
 
         return aligned_dict
 
+    @staticmethod
+    def evaluate_shap(res_dir: str) -> None:
 
-def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
-    """
-    Infers the focus side ('Left' or 'Right') by checking column names
-    against known starting landmarks.
+        # initialize Visualizer
+        viz: Visualizer = Visualizer()
 
-    Args:
-        df (pd.DataFrame): DataFrame (either hand_df or pose_df).
-        model_type (str): 'Hand' or 'Pose' to check the correct set of labels.
+        # get the model algo name (catboost, xgboost, rf)
+        model_algo: str = os.path.basename(res_dir).split('_')[0]
+        task_type: str = os.path.basename(res_dir).split('_')[1]
 
-    Returns:
-        str | None: 'Left', 'Right', or None if side cannot be determined.
-    """
+        # shap value files
+        shap_vals_file_lst = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
+                              if f.startswith(f'{model_algo}_shap_vals_') and f.endswith('.csv')]
 
-    # check hand model labels ('wrist1_x' or 'wrist2_x')
-    if model_type.capitalize() == 'Hand':
-        if 'wrist1_x' in df.columns:
-            return 'Left'
-        elif 'wrist2_x' in df.columns:
-            return 'Right'
+        if not shap_vals_file_lst:
+            return
 
-    # check pose model labels ('wrist_left_x' or 'wrist_right_x')
-    elif model_type.capitalize() == 'Pose':
-        if 'wrist_left_x' in df.columns:
-            return 'Left'
-        elif 'wrist_right_x' in df.columns:
-            return 'Right'
+        # loop for each exercise
+        for shap_vals_file in sorted(shap_vals_file_lst):
 
-    return None
+            # for every shap_vals file there is a corresponding shap_feats file
+            shap_feats_file = shap_vals_file.replace('vals', 'feats')
 
+            df_shap: pd.DataFrame = pd.read_csv(shap_vals_file)
+            df_feat: pd.DataFrame = pd.read_csv(shap_feats_file)
+
+            # clean IDs before plotting
+            if 'p_ID' in df_shap.columns:
+                df_shap = df_shap.drop(columns=['p_ID'])
+            if 'p_ID' in df_feat.columns:
+                df_feat = df_feat.drop(columns=['p_ID'])
+
+            # ensure alignment
+            common_cols = df_shap.columns.tolist()
+            df_feat = df_feat[common_cols].fillna(df_feat[common_cols].median()).fillna(0)
+
+            # plot global importance as bar plot
+            viz.viz_regression_shap_bar(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+
+            # plot impact direction as beeswarm plot
+            viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+
+# def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
+#     """
+#     Infers the focus side ('Left' or 'Right') by checking column names
+#     against known starting landmarks.
+#
+#     Args:
+#         df (pd.DataFrame): DataFrame (either hand_df or pose_df).
+#         model_type (str): 'Hand' or 'Pose' to check the correct set of labels.
+#
+#     Returns:
+#         str | None: 'Left', 'Right', or None if side cannot be determined.
+#     """
+#
+#     # check hand model labels ('wrist1_x' or 'wrist2_x')
+#     if model_type.capitalize() == 'Hand':
+#         if 'wrist1_x' in df.columns:
+#             return 'Left'
+#         elif 'wrist2_x' in df.columns:
+#             return 'Right'
+#
+#     # check pose model labels ('wrist_left_x' or 'wrist_right_x')
+#     elif model_type.capitalize() == 'Pose':
+#         if 'wrist_left_x' in df.columns:
+#             return 'Left'
+#         elif 'wrist_right_x' in df.columns:
+#             return 'Right'
+#
+#     return None
+#
 
 def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path: str) -> None:
     """

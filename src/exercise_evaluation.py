@@ -154,12 +154,13 @@ class ExerciseEvaluator:
         if len(valid_valley_idc) > 1:
             tapping_diff: np.ndarray = np.diff(valid_valley_idc)
             tapping_mean: float = float(np.mean(tapping_diff))
-            tapping_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
+            # tapping_cov is the same as period_cov
+            #tapping_cov: float = float((float(np.std(tapping_diff)) / tapping_mean) * 100) if tapping_mean > 0 else 0.0
 
             # dynamic window for isolation (33% of a period)
             half_window: int = max(int(tapping_mean / 6.0), 2)
         else:
-            tapping_cov: float = 0.0
+            #tapping_cov: float = 0.0
             half_window: int = int(self.fps * 0.05)
 
         # 1.3.2) calculate the tapping isolation
@@ -259,7 +260,7 @@ class ExerciseEvaluator:
             'idx_tap_accuracy': accuracy_percentage,
             'idx_tap_target_error': mean_target_error,
             # rhythm with CoV (period time between taps)
-            'idx_tap_cov': tapping_cov,
+            #'idx_tap_cov': tapping_cov,    -> same as period_cov!
             # isolation (variance of other fingers)
             'idx_tap_isolation': isolation_score,
             # spectral entropy (smoothness)
@@ -716,7 +717,7 @@ class ExerciseEvaluator:
         p_dip = f'dip{passive_side_idx}2'
         p_tip = f'ftip{passive_side_idx}2'
 
-        # We will compute the KCR of the passive index finger as the comparative signal
+        # compute the KCR of the passive index finger as the comparative signal
         if f'{p_tip}_x' in df.columns and f'{p_wrist}_x' in df.columns:
             p_w_arr = df[[f'{p_wrist}_x', f'{p_wrist}_y', f'{p_wrist}_z']].to_numpy()
             p_m_arr = df[[f'{p_mcp}_x', f'{p_mcp}_y', f'{p_mcp}_z']].to_numpy()
@@ -846,7 +847,7 @@ class ExerciseEvaluator:
         z_stability_score: float = float(np.std(euler_z))
 
         # the total out-of-plane compensation movement during the pronation-supination exercise
-        total_comp_movement: float = x_stability_score + z_stability_score
+        total_comp_score: float = x_stability_score + z_stability_score
 
         # 2) smoothness of movement (entropy)
         # get current passive side
@@ -912,7 +913,7 @@ class ExerciseEvaluator:
             # correctness of pronation & supination(completeness of movement)
             'pro_sup_active_rom_score': active_rom_score,
             # rotation stability
-            'pro_sup_isolation': total_comp_movement,
+            'pro_sup_isolation': total_comp_score,
             # spectral entropy (smoothness)
             'pro_sup_entropy': entropy_active,
             # mirror movement (energy ratio)
