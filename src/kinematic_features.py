@@ -333,7 +333,7 @@ class KinematicFeatures:
 
         # velocities
         velocity_curve = np.gradient(clean_signal, 1 / self.fps)
-        rise_vels, fall_vels = [], []
+        rise_vels, fall_vels, vel_ratios = [], [], []
         all_events = sorted(valid_peaks + valid_valleys, key=lambda x: x['idx'])
 
         for i in range(len(all_events) - 1):
@@ -351,8 +351,22 @@ class KinematicFeatures:
                     else:
                         fall_vels.append(np.min(vel_seg))
 
-        features.update(tb.get_descriptive_stats(np.array(rise_vels), 'velocity_pos'))
-        features.update(tb.get_descriptive_stats(np.array(fall_vels), 'velocity_neg'))
+        # velocity ratio
+        for rise, fall in zip(rise_vels, fall_vels):
+            # absolute ratio
+            ratio = abs(fall) / (abs(rise) + 1e-8)
+            vel_ratios.append(ratio)
+
+        # positive velocity stats
+        if rise_vels:
+            features.update(tb.get_descriptive_stats(np.array(rise_vels), 'velocity_pos'))
+        # negative velocity stats
+        if fall_vels:
+            features.update(tb.get_descriptive_stats(np.array(fall_vels), 'velocity_neg'))
+
+        # repetition ratio stats
+        if vel_ratios:
+            features.update(tb.get_descriptive_stats(np.array(vel_ratios), 'velocity_ratio'))
 
         # extraction successful
         features['extraction_status'] = 'success'

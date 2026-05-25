@@ -1044,24 +1044,11 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path:
     # load metric data into a dataframe
     data_df: pd.DataFrame = pd.DataFrame(feature_list_of_dicts)
 
-    # calculate velocity ratio
-    col_names: list[str] = data_df.columns.tolist()
-
     # find positive velocity columns
-    pos_vel_cols: list[str] = [col for col in col_names if 'vel_pos' in col.lower() or '_pos' in col.lower()]
-
-    for pos_col in pos_vel_cols:
-        # find matching negative velocity columns
-        neg_col = pos_col.replace('pos', 'neg')
-
-        if neg_col in col_names:
-            ratio_col_name = pos_col.replace('pos', 'ratio')
-
-            # calculate absolute magnitude ratio (negative velocities are negative values)
-            data_df[ratio_col_name] = data_df[neg_col].abs() / (data_df[pos_col].abs() + 1e-8)
-
-            # drop positive velocity columns
-            data_df.drop(columns=[pos_col], inplace=True)
+    pos_vel_cols: list[str] = [col for col in data_df.columns if 'vel_pos' in col.lower() or '_pos' in col.lower()]
+    if pos_vel_cols:
+        # drop positive velocity columns
+        data_df.drop(columns=pos_vel_cols, inplace=True)
 
     # drop other manually identified features
     drop_col_names: list[str] = ['_rep_num', '_rep_freq', '_mean']

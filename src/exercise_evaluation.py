@@ -683,7 +683,7 @@ class ExerciseEvaluator:
             flexion_score: float = 0.0
 
         # 1.4) Quality: Temporal Dispersion (Synchronization)
-        dispersion_variances = []
+        dispersion_stds = []
 
         # index finger remains the synchronization reference
         index_key = f'{wrist_name}-{finger_names[0]}'
@@ -705,9 +705,9 @@ class ExerciseEvaluator:
 
             if len(rep_timing) == 4:
                 dispersion_sec = np.std(rep_timing) / self.fps
-                dispersion_variances.append(dispersion_sec)
+                dispersion_stds.append(dispersion_sec)
 
-        synchronization_score: float = float(np.mean(dispersion_variances)) if dispersion_variances else 0.0
+        sync_dispersion: float = float(np.mean(dispersion_stds)) if dispersion_stds else 0.0
 
         # 2) smoothness of movement (entropy)
         passive_side_idx = 2 if active_side_idx == 1 else 1
@@ -784,7 +784,7 @@ class ExerciseEvaluator:
             'open_close_extension_score': extension_score,
             'open_close_flexion_score': flexion_score,
             # synchronization of finger movement using temporal dispersion
-            'open_close_sync': synchronization_score,
+            'open_close_sync_dispersion': sync_dispersion,
             # spectral entropy (smoothness)
             'open_close_entropy': entropy_active,
             # mirror movement (energy ratio)
