@@ -226,7 +226,7 @@ class ExerciseEvaluator:
         energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
 
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
-        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
+        energy_ratio: float = float(energy_passive / energy_active + 1e-8) if energy_active > 0 else 0.0
 
         # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
         proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
@@ -517,7 +517,7 @@ class ExerciseEvaluator:
         energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
 
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
-        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
+        energy_ratio: float = float(energy_passive / energy_active + 1e-8) if energy_active > 0 else 0.0
 
         # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
         proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
@@ -750,7 +750,7 @@ class ExerciseEvaluator:
         energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
 
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
-        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
+        energy_ratio: float = float(energy_passive / energy_active + 1e-8) if energy_active > 0 else 0.0
 
         # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
         proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
@@ -884,7 +884,7 @@ class ExerciseEvaluator:
         energy_passive: float = spectral_metrics['Total_Energy_Passive_Global']
 
         # calculate the severity of mirror movement (higher numbers indicate more severe mirror movements)
-        energy_ratio: float = float(energy_passive / energy_active) if energy_active > 0 else 0.0
+        energy_ratio: float = float(energy_passive / energy_active + 1e-8) if energy_active > 0 else 0.0
 
         # 4) calculate proximal movement compensation (wrist, shoulder, and elbow drift)
         proximal_comp = self.kf.calc_movement_compensation(df, active_side_idx)
