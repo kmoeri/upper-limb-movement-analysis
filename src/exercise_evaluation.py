@@ -836,8 +836,12 @@ class ExerciseEvaluator:
         # get config thresholds for valid opening and closing
         tot_active_rom_thresh: float = config['pro_sup'].get('total_active_rom', 140.0)
 
-        # calculate pronation and supination scores
-        active_rom_score = (np.sum(tot_active_rom > tot_active_rom_thresh) / len(tot_active_rom) * 100) if len(tot_active_rom) > 0 else 0.0
+        # calculates the percentage of the target ROM threshold (total_active_rom) reached for each repetition
+        if len(tot_active_rom) > 0:
+            rom_percent = np.clip(tot_active_rom / tot_active_rom_thresh, 0.0, 1.0)
+            active_rom_score = float(np.mean(rom_percent)*100)
+        else:
+            active_rom_score = 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between rotations), stability (out-of-plane compensation)
         # 1.3.1) the rotation rhythm is already given by the period CoV
