@@ -1489,12 +1489,71 @@ class Visualizer:
     def viz_regression_shap_bar(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
                                 model_algo: str, f_path: str, task_type: str) -> None:
 
-        plt.figure(figsize=(10, 6))
-        shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols,
-                          plot_type='bar', show=False)
+        mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
+        total_impact = mean_abs_shap.sum()
+
+        top_cols = mean_abs_shap.nlargest(10).index.tolist()
+        rest_cols = [c for c in common_cols if c not in top_cols]
+
+        df_shap_plot = pd.DataFrame()
+        df_feat_plot = pd.DataFrame()
+        plot_cols = []
+        pct_dict = {}
+
+        # add top features fist (index 0 is the top of the graph)
+        for col in top_cols:
+            col_pct = (mean_abs_shap[col] / total_impact) * 100
+
+            df_shap_plot[col] = df_shap[col]
+            df_feat_plot[col] = df_feat[col]
+
+            plot_cols.append(col)
+            pct_dict[col] = f'{col_pct:.1f}%'
+
+        # add the 'rest' aggregate last (bottom of the graph)
+        if rest_cols:
+            rest_impact = mean_abs_shap[rest_cols].sum()
+            rest_pct = (rest_impact / total_impact) * 100
+            rest_label = f'Sum of {len(rest_cols)} other features'
+
+            # bar length equal the aggregated absolute impact
+            df_shap_plot[rest_label] = rest_impact
+            df_feat_plot[rest_label] = 0.0
+
+            plot_cols.append(rest_label)
+            pct_dict[rest_label] = f'{rest_pct:.1f}%'
+
+        plt.figure(figsize=(10, 7))
+        shap.summary_plot(df_shap_plot[plot_cols].values,
+                          features=df_feat_plot[plot_cols],
+                          feature_names=plot_cols,
+                          plot_type='bar',
+                          max_display=len(plot_cols),
+                          color='#B1E0D9',
+                          sort=False,  # top-down list order
+                          show=False)
+
+        ax = plt.gca()
+        x_max = ax.get_xlim()[1]
+        x_offset = x_max * 0.015
+
+        # map percentages to the corresponding bars
+        y_labels = [tick.get_text() for tick in ax.get_yticklabels()]
+
+        for i, patch in enumerate(ax.patches):
+            if i < len(y_labels):
+                feature_name = y_labels[i]
+                if feature_name in pct_dict:
+                    y_center = patch.get_y() + patch.get_height() / 2
+                    ax.text(x_offset, y_center, pct_dict[feature_name],
+                            va='center', ha='left',
+                            color='black', fontsize=12)
 
         target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
-        plt.title(f'SHAP Global Feature Importance: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
+
+        # pad=60 added to match the height compression of the Beeswarm plot
+        plt.title(f'SHAP Global Feature Importance: {target_exercise_name} ({model_algo.upper()})', fontsize=18, pad=45)
+        plt.xlabel('Mean |SHAP value| (feature attribution)', fontsize=14)
         plt.tight_layout()
 
         # save plot
@@ -1505,26 +1564,133 @@ class Visualizer:
             model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
 
         f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
-        plt.savefig(os.path.join(model_dir, f_basename), dpi=600)
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
 
     def viz_regression_shap_beeswarm(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
                                      model_algo: str, f_path: str, task_type: str) -> None:
 
-        plt.figure(figsize=(10, 6))
-        shap.summary_plot(df_shap.values, features=df_feat, feature_names=common_cols, show=False)
+        # New imports needed for coordinate blending and custom ticks
+        import matplotlib.transforms as mtransforms
+        from matplotlib.ticker import MultipleLocator
 
-        target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
-        plt.title(f'SHAP Feature Impact: {target_exercise_name} ({model_algo.upper()})', fontsize=18)
+        mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
+        top_cols = mean_abs_shap.nlargest(10).index.tolist()
+        rest_cols = [c for c in common_cols if c not in top_cols]
+
+        df_shap_plot = pd.DataFrame()
+        df_feat_plot = pd.DataFrame()
+        plot_cols = []
+
+        # 1) Add Top features FIRST
+        for col in top_cols:
+            df_shap_plot[col] = df_shap[col]
+            df_feat_plot[col] = df_feat[col]
+            plot_cols.append(col)
+
+        # 2) Add the 'Rest' Aggregate LAST
+        if rest_cols:
+            rest_label = f'Sum of {len(rest_cols)} other features'
+            df_shap_plot[rest_label] = df_shap[rest_cols].sum(axis=1)
+            df_feat_plot[rest_label] = 0.0
+            plot_cols.append(rest_label)
+
+        plt.figure(figsize=(10, 7))
+
+        shap.summary_plot(df_shap_plot[plot_cols].values,
+                          features=df_feat_plot[plot_cols],
+                          feature_names=plot_cols,
+                          max_display=len(plot_cols),
+                          sort=False,
+                          color_bar=False,
+                          show=False)
+
+        ax = plt.gca()
+
+        # --- FIX 1: Set X-Axis ticks to steps of 0.1 ---
+        ax.xaxis.set_major_locator(MultipleLocator(0.1))
+
+        # Safely ensure the plot spans at least -0.1 to 0.1 so the colorbar isn't cut off
+        x_min, x_max = ax.get_xlim()
+        ax.set_xlim(min(x_min, -0.1), max(x_max, 0.1))
+
+        # --- FIX 2: Blended Coordinate Colorbar ---
+        cmap = shap.plots.colors.red_blue
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+        sm.set_array([])
+
+        # Create the blended transform: X is tied to Data, Y is tied to the Axes Box
+        trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+
+        # Bounds: [x_start, y_start, width, height]
+        # Start at exactly x = -0.1, make width 0.2 (so it ends at exactly x = 0.1)
+        cb_ax = ax.inset_axes([-0.1, 1.04, 0.2, 0.04], transform=trans)
+
+        cb = plt.colorbar(sm, cax=cb_ax, orientation='horizontal')
+        cb.set_ticks([0, 1])
+        cb.set_ticklabels(['Low', 'High'])
+        cb.set_label('Feature Value', fontsize=12)
+
+        cb.ax.xaxis.set_label_position('top')
+        cb.ax.xaxis.set_ticks_position('top')
+        # ---------------------------------------------------------
+
+        target_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+
+        plt.title(f'SHAP Feature Impact: {target_name} ({model_algo.upper()})', fontsize=18)
+        plt.xlabel('SHAP value (Impact on prediction)', fontsize=14)
         plt.tight_layout()
 
-        # save plot
         if task_type == 'classification':
             model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
         else:
-            # regression
             model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
 
-        f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
-        plt.savefig(os.path.join(model_dir, f_basename), dpi=600)
+        f_basename: str = f'{model_algo}_shap_beeswarm_{target_name}.png'
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
+
+    # def viz_regression_shap_beeswarm_old(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+    #                                      model_algo: str, f_path: str, task_type: str) -> None:
+    #
+    #     # aggregate the 'rest of the features'
+    #     mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
+    #     top_6_cols = mean_abs_shap.nlargest(10).index.tolist()
+    #     rest_cols = [c for c in common_cols if c not in top_6_cols]
+    #
+    #     if rest_cols:
+    #         # create subset with top 6
+    #         df_shap_plot = df_shap[top_6_cols].copy()
+    #         df_feat_plot = df_feat[top_6_cols].copy()
+    #
+    #         # sum the remaining SHAP values per row
+    #         rest_label = f'Sum of {len(rest_cols)} other features'
+    #         df_shap_plot[rest_label] = df_shap[rest_cols].sum(axis=1)
+    #         df_feat_plot[rest_label] = 0.0
+    #
+    #         plot_cols = top_6_cols + [rest_label]
+    #         display_count = 11
+    #     else:
+    #         df_shap_plot = df_shap[common_cols]
+    #         df_feat_plot = df_feat[common_cols]
+    #         plot_cols = common_cols
+    #         display_count = 10
+    #
+    #     plt.figure(figsize=(10, 6))
+    #     shap.summary_plot(df_shap_plot.values, features=df_feat_plot, feature_names=plot_cols,
+    #                       max_display=display_count, sort=False, show=False)
+    #
+    #     target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+    #     plt.title(f'SHAP Feature Impact: {target_exercise_name} ({model_algo.upper()})', fontsize=18, pad=20)
+    #     plt.tight_layout()
+    #
+    #     # save plot
+    #     if task_type == 'classification':
+    #         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+    #     else:
+    #         # regression
+    #         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+    #
+    #     f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
+    #     plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
+    #     plt.close()

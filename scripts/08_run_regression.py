@@ -5,7 +5,9 @@
 import os
 import numpy as np
 import pandas as pd
+from examples.standard.plot_filter import random_state
 from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_error
+from scipy.stats import bootstrap
 
 # modules
 from src.config import config, project_path
@@ -45,10 +47,11 @@ def calc_regression_metrics(df: pd.DataFrame) -> dict:
     accuracies = (1 - (abs(y_true - y_pred) / y_true)) * 100
     mean_accuracy = accuracies.mean()
 
-    # bootstrap 95% CI for accuracy
-    boot_means = [np.random.choice(accuracies, size=len(accuracies), replace=True).mean() for _ in range(1000)]
-    ci_lower = np.percentile(boot_means, 2.5)
-    ci_upper = np.percentile(boot_means, 97.5)
+    # BCa bootstrap 95% CI for accuracy
+    boot_res = bootstrap((accuracies,), np.mean, confidence_level=0.95,
+                         method='BCa', n_resamples=1000, random_state=42)
+    ci_lower = boot_res.confidence_interval.low
+    ci_upper = boot_res.confidence_interval.high
 
     return {'R2': r2, 'RMSE': rmse, 'MAE': mae, 'Mean_Accuracy_%': mean_accuracy,
             'Acc_CI_lower': ci_lower, 'Acc_CI_upper': ci_upper}
