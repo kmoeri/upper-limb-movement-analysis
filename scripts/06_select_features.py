@@ -10,6 +10,7 @@ import numpy as np
 # modules
 from src.config import project_path
 from src.visualization import Visualizer
+from src.reference_scores import merge_feature_with_targets
 
 
 def remove_label_prefix(label: str) -> str:
@@ -29,7 +30,11 @@ def run_feature_reduction():
     # 1) load extracted movement features (raw CSV)
     features_path: str = os.path.join(project_path, 'data', '04_features', 'all_extracted_features.csv')
     df: pd.DataFrame = pd.read_csv(features_path)
-    meta_cols = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID', 'AHA_Score']
+
+    # merge feature DataFrame with target scores DataFrame
+    df, primary_target, target_cols = merge_feature_with_targets(df)
+    meta_cols = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID']
+    meta_cols.extend(target_cols)
 
     # # 2) calculate velocity ratio
     # print('\nGlobal Features Processing ...')
@@ -108,14 +113,25 @@ def run_feature_reduction():
         viz.corr_matrix_heatmap(matrix_data=corr_matrix, mask=mask, ex_name=ex_name, labels=labels)
         corr_matrix.to_csv(os.path.join(out_dir, f'corr_matrix_{ex_name}.csv'), index=False)
 
-        # D) drop multicollinearity (r > 0.85) for the current exercise
-        # select upper triangle to avoid dropping both features
-        upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(np.bool))
+        # D) drop multicollinearity (r > 0.85) based on target score relevance
+
+        # calculate how well each feature correlates with the primary clinical target
+        target_corr = df_ex[numeric_cols].corrwith(df_ex[primary_target], method='spearman').abs()
+
+        # sort feature names by their correlation to the target (highest to lowest)
+        sorted_features = target_corr.sort_values(ascending=False).index.tolist()
+
+        # reorder the feature correlation matrix so the best feature comes first
+        corr_matrix_sorted = corr_matrix.loc[sorted_features, sorted_features]
+
+        # select upper triangle
+        upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix_sorted.shape), k=1).astype(np.bool))
 
         # find features with correlation r > 0.85
         drop_collinear = [col for col in upper_triangle.columns if any(upper_triangle[col] > 0.85)]
 
         if drop_collinear:
+            print(f'\nWarning: Dropping collinear features based on {primary_target}: {drop_collinear}')
             df.loc[ex_mask, drop_collinear] = np.nan
 
     # 3) save clean version of features to CSV

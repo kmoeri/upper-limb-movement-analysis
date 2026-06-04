@@ -79,3 +79,27 @@ def get_target_score_for_regression() -> tuple[pd.DataFrame, list[str]]:
 
     else:
         raise ValueError(f'\nError: {ref_type} is not supported.')
+
+
+def merge_feature_with_targets(df_features: pd.DataFrame) -> tuple[pd.DataFrame, str, list[str]]:
+    """
+    Retrieves the reference scores and merges them with the feature DataFrame.
+
+    Args:
+        df_features: DataFrame containing the kinematic features.
+
+    Returns:
+        tuple[pd.DataFrame, list[str], list[str]]:
+            - df_merged: The merged DataFrame.
+            - primary_target: The column name of the main score to predict (e.g., Jebsen Taylor)
+            - all_targets: A list of all score columns added
+    """
+    df_targets, target_cols = get_target_score_for_regression()
+
+    # merge participant ID and visit ID
+    df_merged = pd.merge(df_features, df_targets, on=['p_ID', 'visit_ID'], how='inner')
+
+    # primary target is located first in the list
+    primary_target: str = target_cols[0]
+
+    return df_merged, primary_target, target_cols
