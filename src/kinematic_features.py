@@ -34,7 +34,7 @@ class KinematicFeatures:
                 - 'Spectral_Entropy_Passive_Global': Float representing the overall trial entropy.
         """
 
-        # get the spectral frequencies (limited to 20 Hz) for each landmark and calculate the shannon-entropy
+        # get the spectral frequencies (limited to 10 Hz) for each landmark and calculate the shannon-entropy
         tb = ToolBox(fps=self.fps)
 
         # detrending the signal (remove spatial offset)
@@ -68,11 +68,11 @@ class KinematicFeatures:
         # get 1D frequency (f) array from the SFT object
         f = SFT_active.f
 
-        # limit frequency to 20 Hz
-        f_limit = 20
+        # limit frequency to 10 Hz (equal to lowpass filter)
+        f_limit = config['preprocessing'].get('butter_cutoff_freq', 10.0)
         f_idx = f <= f_limit
 
-        # slice the arrays to limit the values to 20 Hz
+        # slice the arrays to limit the values to 10 Hz
         Sxx_filtered_active_plot = power_active_clean[f_idx, :]
         Sxx_filtered_passive_plot = power_passive_clean[f_idx, :]
 
