@@ -81,7 +81,7 @@ def get_target_score_for_regression() -> tuple[pd.DataFrame, list[str]]:
         raise ValueError(f'\nError: {ref_type} is not supported.')
 
 
-def merge_feature_with_targets(df_features: pd.DataFrame) -> tuple[pd.DataFrame, str, list[str]]:
+def merge_features_with_targets(df_features: pd.DataFrame) -> tuple[pd.DataFrame, str, list[str]]:
     """
     Retrieves the reference scores and merges them with the feature DataFrame.
 

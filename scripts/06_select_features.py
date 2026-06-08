@@ -10,7 +10,7 @@ import numpy as np
 # modules
 from src.config import project_path
 from src.visualization import Visualizer
-from src.reference_scores import merge_feature_with_targets
+from src.reference_scores import merge_features_with_targets
 
 
 def remove_label_prefix(label: str) -> str:
@@ -32,7 +32,7 @@ def run_feature_reduction():
     df: pd.DataFrame = pd.read_csv(features_path)
 
     # merge feature DataFrame with target scores DataFrame
-    df, primary_target, target_cols = merge_feature_with_targets(df)
+    df, primary_target, target_cols = merge_features_with_targets(df)
     meta_cols = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID']
     meta_cols.extend(target_cols)
 
@@ -134,7 +134,11 @@ def run_feature_reduction():
             print(f'\nWarning: Dropping collinear features based on {primary_target}: {drop_collinear}')
             df.loc[ex_mask, drop_collinear] = np.nan
 
-    # 3) save clean version of features to CSV
+    # 3) drop the reference scores to keep features and scores separated
+    if target_cols:
+        df.drop(columns=target_cols, inplace=True, errors='ignore')
+
+    # 4) save clean version of features to CSV
     df.to_csv(os.path.join(out_dir, 'clean_features.csv'), index=False)
     print('\nFeature Reduction Done. Results saved.')
 

@@ -5,7 +5,6 @@
 import os
 import numpy as np
 import pandas as pd
-from examples.standard.plot_filter import random_state
 from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_error
 from scipy.stats import bootstrap
 
@@ -14,7 +13,7 @@ from src.config import config, project_path
 from src.utils import ToolBox
 from src.visualization import Visualizer
 from src.ml_pipeline_manager import EnsembleManager
-from src.reference_scores import get_target_score_for_regression
+from src.reference_scores import merge_features_with_targets
 
 
 def calc_asymmetry_ratios(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
@@ -116,15 +115,16 @@ def run_regression_pipeline():
         features_path: str = os.path.join(project_path, 'data', '05_results', '04_classification', 'clean_features.csv')
         df_raw: pd.DataFrame = pd.read_csv(features_path)
 
-        # define features
+        # extract raw feature names
         meta_cols: list[str] = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID']
         feature_cols: list[str] = [c for c in df_raw.columns if c not in meta_cols]
 
         # 2) transforming raw kinematics into asymmetry ratios and merge with target scores
         print('\nTransforming kinematics into Asymmetry Ratios ...')
         df_kinematics: pd.DataFrame = calc_asymmetry_ratios(df_raw, feature_cols)
-        df_targets, target_columns = get_target_score_for_regression()
-        df_master: pd.DataFrame = pd.merge(df_kinematics, df_targets, on=['p_ID', 'visit_ID'], how='inner')
+
+        # get the reference scores merged with the features
+        df_master, primary_target, target_columns = merge_features_with_targets(df_kinematics)
 
         # 3) loop through targets
         for target_col in target_columns:
