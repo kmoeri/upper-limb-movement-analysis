@@ -4,7 +4,7 @@
 # libraries
 import os
 import pandas as pd
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, precision_score, recall_score, matthews_corrcoef
 
 # modules
 from src.config import config, project_path
@@ -24,8 +24,10 @@ def calc_classification_metrics(df: pd.DataFrame) -> dict:
     f1 = f1_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred)
     recall = recall_score(y_true, y_pred)
+    matthews_corr = matthews_corrcoef(y_true, y_pred)
 
-    return {'Accuracy': accuracy, 'ROC_AUC': roc_auc, 'F1_Score': f1, 'Precision': precision, 'Recall': recall}
+    return {'Accuracy': accuracy, 'ROC_AUC': roc_auc, 'F1_Score': f1,
+            'Precision': precision, 'Recall': recall, 'MCC': matthews_corr}
 
 
 def evaluate_classification_models(res_dir: str) -> None:
@@ -48,18 +50,27 @@ def evaluate_classification_models(res_dir: str) -> None:
         if df.empty:
             continue
 
-        target = df['Target'].iloc[0]
+        # extract the target from the filename
+        filename = os.path.basename(file)
+        target = filename.replace(f'{model_algo}_predictions_', '').replace('.csv', '')
+
+        # calculate metrics
         metrics = calc_classification_metrics(df)
-        metrics['Target'] = target
+
+        # insert 'Target' key-value pair to dictionary
+        metrics = {'Target': target, **metrics}
         metrics_lst.append(metrics)
 
         # plot confusion matrix
         viz.viz_classification_confusion_matrix(df, model_algo)
 
-    metrics_df = pd.DataFrame(metrics_lst)
-    print('\nMaster Metrics Table:')
-    print(metrics_df.round(3).to_string(index=False))
-    metrics_df.to_csv(os.path.join(res_dir, f'{model_algo}_metrics.csv'), index=False)
+    if metrics_lst:
+        metrics_df = pd.DataFrame(metrics_lst)
+        print('\nMaster Metrics Table:')
+        print(metrics_df.round(3).to_string(index=False))
+        metrics_df.to_csv(os.path.join(res_dir, f'{model_algo}_metrics.csv'), index=False)
+    else:
+        print('\nNo metrics were found. No table is created.')
 
 
 def run_classification_pipeline():
@@ -112,7 +123,7 @@ def run_classification_pipeline():
 
     print('\nEvaluating SHAP ...')
     tb: ToolBox = ToolBox()
-    tb.evaluate_shap(model_dir,)
+    tb.evaluate_shap(model_dir)
 
     print('\nEvaluation was successful. Results saved.')
 

@@ -113,7 +113,7 @@ def run_feature_reduction():
         viz.corr_matrix_heatmap(matrix_data=corr_matrix, mask=mask, ex_name=ex_name, labels=labels)
         corr_matrix.to_csv(os.path.join(out_dir, f'corr_matrix_{ex_name}.csv'), index=False)
 
-        # D) drop multicollinearity (r > 0.85) based on target score relevance
+        # D) drop collinear feature (r > 0.85) based on target score relevance
 
         # calculate how well each feature correlates with the primary clinical target
         target_corr = df_ex[numeric_cols].corrwith(df_ex[primary_target], method='spearman').abs()

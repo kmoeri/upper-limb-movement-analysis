@@ -9,6 +9,7 @@ from sklearn.model_selection import StratifiedGroupKFold, GroupKFold
 # modules
 from src.config import config
 from src.model_wrapper import ModelWrapper
+from src.visualization import Visualizer
 
 
 class EnsembleManager:
@@ -236,6 +237,10 @@ class EnsembleManager:
 
             # create 3 equally sized percentiles with "qcut"
             df_baseline['severity_bin'] = pd.qcut(df_baseline[target_col], q=3, labels=['Mild', 'Moderate', 'Severe'])
+
+            # visualize regression target distribution
+            viz: Visualizer = Visualizer()
+            viz.viz_regression_target_distribution(df_baseline, target_col, self.model_type)
 
             # map the bins back to the main dataframe
             bin_mapping = dict(zip(df_baseline['p_ID'], df_baseline['severity_bin']))
