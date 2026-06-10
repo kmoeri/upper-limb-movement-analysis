@@ -256,6 +256,9 @@ class ExerciseEvaluator:
             'idx_tap_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
             'idx_tap_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
             'idx_tap_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            'idx_tap_vel_ratio_mean': performance_features.get('velocity_ratio_mean', 0.0),
+            'idx_tap_vel_ratio_pct_90': performance_features.get('velocity_ratio_pct_90', 0.0),
+            'idx_tap_vel_ratio_cov': performance_features.get('velocity_ratio_cov', 0.0),
             # correctness of the tapping (spatial accuracy)
             'idx_tap_accuracy': accuracy_percentage,
             'idx_tap_target_error': mean_target_error,
@@ -780,6 +783,9 @@ class ExerciseEvaluator:
             'open_close_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
             'open_close_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
             'open_close_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            'open_close_vel_ratio_mean': performance_features.get('velocity_ratio_mean', 0.0),
+            'open_close_vel_ratio_pct_90': performance_features.get('velocity_ratio_pct_90', 0.0),
+            'open_close_vel_ratio_cov': performance_features.get('velocity_ratio_cov', 0.0),
             # correctness of opening & closing (completeness of movement)
             'open_close_extension_score': extension_score,
             'open_close_flexion_score': flexion_score,
@@ -914,6 +920,9 @@ class ExerciseEvaluator:
             'pro_sup_vel_neg_mean': performance_features.get('velocity_neg_mean', 0.0),
             'pro_sup_vel_neg_pct_90': performance_features.get('velocity_neg_pct_90', 0.0),
             'pro_sup_vel_neg_cov': performance_features.get('velocity_neg_cov', 0.0),
+            'pro_sup_vel_ratio_mean': performance_features.get('velocity_ratio_mean', 0.0),
+            'pro_sup_vel_ratio_pct_90': performance_features.get('velocity_ratio_pct_90', 0.0),
+            'pro_sup_vel_ratio_cov': performance_features.get('velocity_ratio_cov', 0.0),
             # correctness of pronation & supination(completeness of movement)
             'pro_sup_active_rom_score': active_rom_score,
             # rotation stability

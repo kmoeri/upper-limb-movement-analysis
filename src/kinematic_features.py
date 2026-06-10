@@ -237,6 +237,7 @@ class KinematicFeatures:
                     'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
                     'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
                     'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
+                    'velocity_ratio_mean': 0.0, 'velocity_ratio_pct_90': 0.0, 'velocity_ratio_cov': 0.0,
                     'extraction_status': 'failed',
                     'valid_peaks_idx': [],
                     'valid_valleys_idx': []}
