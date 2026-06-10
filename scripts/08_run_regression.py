@@ -138,53 +138,13 @@ def run_regression_pipeline():
                                        n_trials=config['regression']['optuna_n_trials'])
 
             # call inner- and outer-loop cross validation function; returns validation results and SHAP values
-            df_oof, df_shap, df_feat = ensemble.train_with_nested_cv(df_master, feature_cols, target_col, baseline_visit, n_splits=5)
+            df_oof, df_shap, df_feat = ensemble.train_with_nested_cv(df_master, feature_cols, target_col,
+                                                                     baseline_visit, n_splits=5, out_dir=out_dir)
 
             # save pooled out-of-fold results
             df_oof.to_csv(os.path.join(out_dir, f'{model_algo}_predictions_{target_col}.csv'), index=False)
             df_shap.to_csv(os.path.join(out_dir, f'{model_algo}_shap_vals_{target_col}.csv'), index=False)
             df_feat.to_csv(os.path.join(out_dir, f'{model_algo}_shap_feats_{target_col}.csv'), index=False)
-
-            # # loop exercises, run optuna, perform SHAP reducing
-            # ensemble.train_all_exercises(df_train, feature_cols, target_col)
-            #
-            # # 3.2) Evaluate test set
-            # print(f'\nEvaluating test set for {target_col} ...')
-            # results: list[dict] = []
-            #
-            # # group by participant ID to evaluate visit by visit
-            # for pid, df_visit in df_test.groupby('p_ID'):
-            #
-            #     # ensure only baseline visits are used
-            #     df_baseline = df_visit[df_visit['visit_ID'] == baseline_visit]
-            #     if df_baseline.empty:
-            #         continue
-            #
-            #     # get ground truth
-            #     real_score = df_baseline[target_col].iloc[0]
-            #
-            #     # get ensemble prediction
-            #     predicted_score = ensemble.predict_visit(df_baseline, feature_cols)
-            #
-            #     if pd.isna(predicted_score):
-            #         continue
-            #
-            #     # append current results
-            #     results.append({'Target': target_col,
-            #                     'p_ID': pid,
-            #                     'Real_Score': real_score,
-            #                     'Predicted_Score': round(predicted_score, 3),
-            #                     'Error': round(abs(real_score - predicted_score), 3),
-            #                     'Exercises_Used': list(df_baseline['ex_name'].unique())})
-            #
-            #     print(f'Participant ID: {pid} | Real Score: {real_score} | '
-            #           f'Predicted Score: {predicted_score:.2f} | Used: {len(df_baseline)} exercises.')
-            #
-            # # save final results
-            # results_df = pd.DataFrame(results)
-            # out_dir: str = os.path.join(project_path, 'data', '05_results', '06_regression')
-            # os.makedirs(out_dir, exist_ok=True)
-            # results_df.to_csv(os.path.join(out_dir, f'{model_algo}_predictions_{target_col}.csv'), index=False)
 
         print(f'\nRegression completed for {target_type}. Results saved.')
 

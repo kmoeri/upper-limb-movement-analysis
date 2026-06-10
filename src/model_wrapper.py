@@ -209,6 +209,38 @@ class ModelWrapper:
 
         return self
 
+    def fit_with_predefined(self, X: pd.DataFrame, y: pd.Series, best_params: dict, selected_features: list[str]):
+        """
+        Bypasses SHAP reduction and Optuna tuning when optimal hyperparameters data already exists from a previous run.
+
+        Args:
+            X (pd.DataFrame): Feature matrix
+            y (pd.Series): Target vector
+            best_params (dict): The best hyperparameters evaluated in the previous run.
+            selected_features (list[str]): The 6 selected features from previous run.
+
+        Returns:
+            self
+        """
+
+        print(f'Loading cached parameters from previous run. Optuna tuning for {self.model_type.upper()} is skipped ...')
+
+        self.selected_features = selected_features
+
+        # extract the cached cross-validation error (will be used for ensemble weighting)
+        self.study_best_value = best_params.get('_cv_error', 1.0)
+
+        # clean the parameter dictionary before passing it to the model
+        clean_params = {k: v for k, v in best_params.items() if k != '_cv_error'}
+        self.best_params = clean_params
+
+        # refit the final model instantly
+        X_reduced = X[self.selected_features]
+        self.final_model = self._get_estimator(clean_params)
+        self.final_model.fit(X_reduced, y)
+
+        return self
+
     # inference methods
     def predict(self, X_new: pd.DataFrame) -> pd.DataFrame:
         return self.final_model.predict(X_new[self.selected_features])

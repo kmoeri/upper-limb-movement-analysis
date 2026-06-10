@@ -1,9 +1,11 @@
 # src/ml_pipeline_manager.py
 
 # libraries
-import pandas as pd
-import numpy as np
+import os
+import json
 import shap
+import numpy as np
+import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold, GroupKFold
 
 # modules
@@ -31,75 +33,25 @@ class EnsembleManager:
         # define exercises
         self.expected_exercises: list[str] = ['FingerTapping', 'FingerAlternation', 'HandOpening', 'ProSup']
 
-    # def predict_visit(self, df_visit: pd.DataFrame, feature_cols: list[str]) -> float:
-    #     """
-    #     Takes all rows for a single participant visit (1-4 rows depending on completed exercises) and
-    #     outputs the weighted ensemble prediction.
-    #
-    #     Args:
-    #         df_visit (pd.DataFrame): Visit data.
-    #         feature_cols (list[str]): List of features to train on.
-    #
-    #     Returns:
-    #         float: Weighted ensemble prediction.
-    #     """
-    #
-    #     predictions = []
-    #     base_weights = []
-    #
-    #     # identify which exercises were completed
-    #     completed_exercises = df_visit['ex_name'].unique()
-    #
-    #     for ex_name in completed_exercises:
-    #         if ex_name not in self.trained_models:
-    #             continue    # skip if there is no model for this exercise
-    #
-    #         # get the row for this exercise
-    #         df_ex_row: pd.DataFrame = df_visit[df_visit['ex_name'] == ex_name]
-    #         X_new: pd.DataFrame = df_ex_row[feature_cols]
-    #
-    #         # get prediction from the corresponding model
-    #         model = self.trained_models[ex_name]
-    #
-    #         if self.task_type == 'regression':
-    #             pred = model.predict(X_new)[0]
-    #         else:
-    #             pred = model.predict_proba(X_new)[0, 1]     # get probability of class 1
-    #
-    #         # calculate inverse-error weight (1/RMSE)
-    #         error = self.exercise_errors[ex_name]
-    #         weight = 1.0 / (error + 1e-8)   # prevent division by zero
-    #
-    #         predictions.append(pred)
-    #         base_weights.append(weight)
-    #
-    #     if not predictions:
-    #         return np.nan
-    #
-    #     # dynamic normalization
-    #     total_weight = sum(base_weights)
-    #     normalized_weights = [weight / total_weight for weight in base_weights]
-    #
-    #     # calculate the final weighted prediction
-    #     final_prediction = sum(prediction * weight for prediction, weight in zip(predictions, normalized_weights))
-    #
-    #     return final_prediction
-    #
-    def train_all_exercises(self, df_train: pd.DataFrame, feature_cols: list[str], target_col: str):
+    def train_all_exercises(self, df_train: pd.DataFrame, feature_cols: list[str],
+                            target_col: str, pre_tuned_params: dict = None) -> dict:
         """
-        Loops across each exercise, filtering data and training a model using a hold-out validation approach.
+        Trains models for all exercises. If pre_tuned_params is provided (data from a previous run),
+        the tuning is skipped.
 
         Args:
             df_train (pd.DataFrame): Training data.
             feature_cols (list[str]): List of features to train on.
             target_col (str): Target column.
+            pre_tuned_params (dict): Dictionary of tuning parameters from a previous run.
 
         Returns:
-
+            newly_tuned_params (dict): Dictionary of tuned parameters and selected features.
         """
 
         self.trained_models = {}
         self.exercise_errors = {}
+        newly_tuned_params = {}
 
         for ex_name in self.expected_exercises:
             print(f'Processing exercise: {ex_name} ...')
@@ -122,9 +74,21 @@ class EnsembleManager:
                                                  task_type=self.task_type,
                                                  n_trials=self.n_trials)
 
-            # fit and reduce
-            max_features: int = config['classification']['max_features']
-            wrapper.fit_and_reduce(X, y, groups, max_features=max_features)
+            if pre_tuned_params and ex_name in pre_tuned_params:
+                # load from cache
+                cached_data = pre_tuned_params[ex_name]
+                wrapper.fit_with_predefined(X, y, cached_data['params'], cached_data['features'])
+            else:
+                # fit and reduce from scratch
+                max_features: int = config['classification']['max_features']
+                wrapper.fit_and_reduce(X, y, groups, max_features=max_features)
+
+                # bundle parameters to save to JSON
+                params_to_save = wrapper.best_params.copy()
+                params_to_save['_cv_error'] = wrapper.study_best_value if hasattr(wrapper, 'study_best_value') else 1.0
+
+                newly_tuned_params[ex_name] = {'params': params_to_save,
+                                               'features': wrapper.selected_features}
 
             # store trained wrapper
             self.trained_models[ex_name] = wrapper
@@ -134,6 +98,7 @@ class EnsembleManager:
             self.exercise_errors[ex_name] = best_error
 
         print('\nAll exercises trained successfully.')
+        return newly_tuned_params
 
     def predict_and_explain_visit(self, df_visit: pd.DataFrame, feature_cols: list[str]) -> tuple:
         """
@@ -212,7 +177,7 @@ class EnsembleManager:
         return final_prediction, participant_shap, participant_features
 
     def train_with_nested_cv(self, df: pd.DataFrame, feature_cols: list[str], target_col: str, baseline_visit: str,
-                             n_splits: int = 5) -> tuple:
+                             n_splits: int = 5, out_dir: str = None) -> tuple:
         """
         Executes a nested Cross-Validation (CV) with StratifiedGroupKFold. Dynamically bins the target variable
         (e.g., Jebson Taylor assessment scores) to ensure balanced severity (mild, moderate, severe) across folds.
@@ -224,6 +189,7 @@ class EnsembleManager:
             target_col (str): The target column with the scores to be predicted (also used for training).
             baseline_visit (str): Visit ID information to only use the baseline data for evaluation (test fold).
             n_splits (int, optional): Number of folds. Defaults to 5.
+            out_dir (str, optional): Directory to store the CV results. Defaults to None.
 
         Returns:
             tuple: (OOF predictions for all patients, SHAP value DataFrame, SHAP feature DataFrame).
@@ -265,6 +231,15 @@ class EnsembleManager:
             cv_splitter = GroupKFold(n_splits=n_splits)
             split_iterator = cv_splitter.split(X, y=y, groups=groups)
 
+        # json cache loader
+        all_folds_params = {}
+        json_path = os.path.join(out_dir, f'{self.model_type}_tuned_params_{target_col}.json') if out_dir else None
+
+        if json_path and os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                all_folds_params = json.load(f)
+            print('Found cached hyperparameter file. Optuna tuning will be bypassed.')
+
         # list definition to store the oof results and SHAP results
         oof_results_lst: list = []
         shap_values_lst: list = []
@@ -277,6 +252,16 @@ class EnsembleManager:
             # df_train_fold contains all visits (T1, T2, and T3) for the training folds (e.g., 20 participants)
             df_train_fold = df.iloc[train_idx].copy()
             df_val_fold = df.iloc[val_idx].copy()
+
+            # pass cache and save updates
+            fold_key: str = f'fold_{fold}'
+            cached_fold_data = all_folds_params.get(fold_key, None)
+            new_params = self.train_all_exercises(df_train_fold, feature_cols, target_col, pre_tuned_params=cached_fold_data)
+
+            if new_params and json_path:
+                all_folds_params[fold_key] = new_params
+                with open(json_path, 'w') as f:
+                    json.dump(all_folds_params, f, indent=4)
 
             # 1) train the ensemble on the augmented training data
             self.train_all_exercises(df_train_fold, feature_cols, target_col)

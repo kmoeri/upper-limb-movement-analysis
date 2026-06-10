@@ -83,16 +83,21 @@ def run_classification_pipeline():
     res_dir: str = os.path.join(project_path, 'data', '05_results', '04_classification')
     model_dir: str = os.path.join(res_dir, f'{model_algo}_classification')
 
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
+    # create model directory if it does not exist
+    os.makedirs(model_dir, exist_ok=True)
 
-        # 1) load and split dataset
-        features_path: str = os.path.join(res_dir, 'clean_features.csv')
-        df_raw: pd.DataFrame = pd.read_csv(features_path)
+    # 1) load and split dataset
+    features_path: str = os.path.join(res_dir, 'clean_features.csv')
+    df_raw: pd.DataFrame = pd.read_csv(features_path)
 
-        # binary mapping of condition: 1 = Affected, 0 = Healthy
-        df_raw['is_affected'] = df_raw['side_condition'].apply(lambda x: 1 if x == 'Affected' else 0)
-        target_col = 'is_affected'    # target column to predict
+    # binary mapping of condition: 1 = Affected, 0 = Healthy
+    df_raw['is_affected'] = df_raw['side_condition'].apply(lambda x: 1 if x == 'Affected' else 0)
+    target_col = 'is_affected'    # target column to predict
+
+    # check whether prediction file already exists
+    prediction_file: str = os.path.join(model_dir, f'{model_algo}_predictions_{target_col}.csv')
+
+    if not os.path.exists(prediction_file):
 
         # define features
         meta_cols = ['p_ID', 'visit_ID', 'ex_name', 'affected_side', 'side_focus', 'side_condition', 'cam_ID', target_col]
@@ -106,7 +111,7 @@ def run_classification_pipeline():
 
         # call inner- and outer-loop cross validation
         df_oof, df_shap, df_feat = ensemble.train_with_nested_cv(df_raw, feature_cols, target_col, baseline_visit,
-                                                                 n_splits=5)
+                                                                 n_splits=5, out_dir=model_dir)
 
         # 3) save Out-Of-Fold (OOF) results and SHAP
         df_oof.to_csv(os.path.join(model_dir, f'{model_algo}_predictions_{target_col}.csv'), index=False)
@@ -116,7 +121,7 @@ def run_classification_pipeline():
         print('\nClassification complete. Results saved.')
 
     else:
-        print('\nClassification results directory already exists. Classification skipped.')
+        print('\nClassification results already exists. Classification skipped.')
 
     print(f'\nEvaluating models ...')
     evaluate_classification_models(model_dir)
