@@ -1399,7 +1399,7 @@ class Visualizer:
         plt.figure(figsize=(12, 10))
 
         sns.heatmap(matrix_data, mask=mask, cmap='coolwarm', vmin=0, vmax=1, xticklabels=labels, yticklabels=labels,
-                    annot=True, square=True, linewidths=.5, fmt='.2f')
+                    annot=True, annot_kws={"size": 14}, square=True, linewidths=.5, fmt='.2f')
 
         plt.title(f'Spearman Correlation Matrix - {ex_name}', fontsize=16)
         plt.tight_layout()
@@ -1433,6 +1433,55 @@ class Visualizer:
     # ============================================================================= #
     #                           6) REGRESSION                                       #
     # ============================================================================= #
+    def viz_regression_target_distribution(self, df_baseline: pd.DataFrame, target_col: str, model_algo: str) -> None:
+        """
+        Creates a histogram of the target score (e.g., Jebsen Taylor Hand Function Test) distribution for
+        the baseline visits, color-coded by severity bins (terciles), with vertical lines marking the splits.
+
+        Args:
+            df_baseline (pd.DataFrame): Dataset including all features and target variables of the 1st visit (T1)
+            target_col (str): The target column with the scores to be predicted (also used for training).
+            model_algo (str): The used model algorithm (xgboost, catboost, or random forest)
+
+        Returns:
+            None
+        """
+        plt.figure(figsize=(10, 6))
+
+        # define a clinical traffic-light palette
+        palette = {'Mild': '#2ca02c', 'Moderate': '#ff7f0e', 'Severe': '#d62728'}
+
+        # plot a stacked histogram
+        sns.histplot(data=df_baseline, x=target_col, hue='severity_bin',
+                     palette=palette, multiple='stack', bins=15, edgecolor='black', alpha=0.85)
+
+        # calculate the exact numerical thresholds where the percentiles split
+        mild_max = df_baseline[df_baseline['severity_bin'] == 'Mild'][target_col].max()
+        mod_max = df_baseline[df_baseline['severity_bin'] == 'Moderate'][target_col].max()
+
+        # overlay vertical dashed lines for the tercile boundaries
+        plt.axvline(mild_max, color='black', linestyle='--', lw=2, label=f'33rd Percentile ({mild_max:.2f})')
+        plt.axvline(mod_max, color='black', linestyle='--', lw=2, label=f'66th Percentile ({mod_max:.2f})')
+
+        # layout and labeling
+        # clean up the title based on the target name
+        clean_target = target_col.replace('Asymmetry_JT_Ratio_', 'JT Subtest: ').replace('_', ' ')
+        plt.title(f'Target Distribution & Stratification Splits\n{clean_target}', fontsize=16, pad=15)
+        plt.xlabel('Target Score (Log-Ratio)', fontsize=14)
+        plt.ylabel('Count (Baseline Participants)', fontsize=14)
+
+        # fix the legend to include both the bins and the vertical lines
+        plt.legend(title='Severity Bin & Splits', bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+
+        # save figure
+        model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
+        os.makedirs(model_dir, exist_ok=True)
+
+        f_basename: str = f'{model_algo}_target_distribution_{target_col}.png'
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight')
+        plt.close()
+
     def viz_regression_identity_plot(self, df: pd.DataFrame, model_algo: str) -> None:
 
         plt.figure(figsize=(10, 8))
