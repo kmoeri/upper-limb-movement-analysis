@@ -35,6 +35,7 @@ class ToolBox:
         self.video_height: int = video_height
         self.fps: float = fps
 
+    # MediaPipe ---- Start ----
     @staticmethod
     def shift_origin_to_shoulders(landmarks_dict: dict, shoulder_name_l: str, shoulder_name_r: str) -> dict:
         # TODO: docstring
@@ -68,6 +69,7 @@ class ToolBox:
                 landmarks_dict[landmark_name][2] += offset_z
 
         return landmarks_dict
+    # Mediapipe ---- End ----
 
     def normalize_to_aspect_ratio(self, raw_landmarks: dict) -> dict:
         """
@@ -196,7 +198,8 @@ class ToolBox:
 
         return r_clean
 
-    def filter_landmark_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+    def filter_landmark_dataframe(self, df: pd.DataFrame,
+                                  critical_prefixes: tuple = ('shoulder', 'elbow', 'wrist', 'cmc', 'mcp', 'pip', 'dip', 'ip', 'ftip')) -> tuple[pd.DataFrame, dict]:
         """
         Preprocess landmark data in three stages:
         1) Interpolation
@@ -205,9 +208,10 @@ class ToolBox:
 
         Args:
             df (pd.DataFrame): Pandas dataframe of raw landmarks (3D coordinates and rotation matrices).
+            critical_prefixes (tuple): Landmark prefixes used in tracking quality stats.
 
         Returns:
-            clean_df (pd.DataFrame): Pandas dataframe comprising the filtered landmark data.
+            tuple (clean_df (pd.DataFrame), tracking_stats (dict)): Tuple of filtered landmark dataframe and missing data stats.
         """
 
         # configurations
@@ -223,7 +227,27 @@ class ToolBox:
         coord_cols: list[str] = [col for col in clean_df.columns if col.endswith(('_x', '_y', '_z'))]
         base_names: list[str] = list(set([col[:-2] for col in coord_cols]))
 
+        # split essential from optional landmarks
+        crit_lms: list[str] = [lm for lm in base_names if lm.startswith(critical_prefixes)]
+        non_crit_lms: list[str] = [lm for lm in base_names if not lm.startswith(critical_prefixes)]
+
+        crit_cols: list[str] = [f"{lm}_{ax}" for lm in crit_lms for ax in ['x', 'y', 'z']]
+        non_crit_cols: list[str] = [f"{lm}_{ax}" for lm in non_crit_lms for ax in ['x', 'y', 'z']]
+
+        # calculate initial missing data
+        total_crit_cells = len(df) * len(crit_cols)
+        nan_crit_cells = df[crit_cols].isna().sum().sum() if crit_cols else 0
+
+        total_non_crit_cells = len(df) * len(non_crit_cols)
+        nan_non_crit_cells = df[non_crit_cols].isna().sum().sum() if non_crit_cols else 0
+
+        total_cells = total_crit_cells + total_non_crit_cells
+        total_nans = nan_crit_cells + nan_non_crit_cells
+
+        # gap detection lists
         valid_cols = []
+        dropped_crit_lms = []
+        dropped_non_crit_lms = []
 
         # check for gaps and skip invalid landmarks
         for lm in base_names:
@@ -241,14 +265,30 @@ class ToolBox:
                         break
 
             if is_gap_exceeded:
+
+                # log dropped landmarks for stats
+                if lm in crit_lms:
+                    dropped_crit_lms.append(lm)
+                else:
+                    dropped_non_crit_lms.append(lm)
+
                 print(f'Landmark {lm} flagged invalid (missing data > {MAX_GAP_THRESHOLD}).')
                 clean_df[cols] = np.nan
             else:
                 valid_cols.extend(cols)
 
+        # compile tracking statistics for the current trial
+        tracking_stats = {'frames': len(df),
+                          'total_cells': total_cells,
+                          'total_nans': total_nans,
+                          'nan_crit_cells': nan_crit_cells,
+                          'nan_non_crit_cells': nan_non_crit_cells,
+                          'dropped_crit_lms': dropped_crit_lms,
+                          'dropped_non_crit_lms': dropped_non_crit_lms}
+
         # if all landmarks are invalid
         if not valid_cols:
-            return clean_df
+            return clean_df, tracking_stats
 
         # interpolation
         valid_df: pd.DataFrame = clean_df[valid_cols].interpolate(method='linear', limit_direction='both')
@@ -270,17 +310,15 @@ class ToolBox:
         min_pad_len = 3 * max(len(a), len(b))
 
         if len(valid_df) <= min_pad_len:
+            print(f'\nWarning: Trial too short ({len(valid_df)} frames). Bypassing Butterworth filter to prevent crash.')
             clean_df[valid_cols] = valid_df.to_numpy()
         else:
             # calculate padding (1.0 second)
             padlen: int = int(1.0 * self.fps)
             padlen = min(padlen, len(valid_df) - 1)     # prevent padlen from exceeding the data length
-
             flat_coords_tensor: np.ndarray = valid_df.to_numpy()         # shape: (frames, valid_cols)
             clean_coords_tensor: np.ndarray = filtfilt(b, a, flat_coords_tensor, axis=0, padlen=padlen)
-
-            # new data frame with filtered data
-            clean_df[valid_cols] = clean_coords_tensor
+            clean_df[valid_cols] = clean_coords_tensor  # new data frame with filtered data
 
         # 2) adjust rotation matrices to new landmark location
         kinematic_chain: dict = self.get_kinematic_chain()
@@ -306,7 +344,7 @@ class ToolBox:
             r_clean = self.apply_delta_rotation(vec_raw, vec_clean, r_raw)
             clean_df[rot_col] = list(r_clean.reshape(-1, 9))
 
-        return clean_df
+        return clean_df, tracking_stats
 
     # Hampel & Kalman & Savgol
     def filter_landmarks_kalman(self, landmarks_dict: dict) -> dict:
