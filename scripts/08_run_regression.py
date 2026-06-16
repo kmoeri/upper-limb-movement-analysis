@@ -38,12 +38,20 @@ def calc_regression_metrics(df: pd.DataFrame) -> dict:
     y_true = df['Real_Score']
     y_pred = df['Predicted_Score']
 
+    # standard regression metrics
     r2 = r2_score(y_true, y_pred)
     rmse = root_mean_squared_error(y_true, y_pred)
     mae = mean_absolute_error(y_true, y_pred)
 
-    # percentage accuracy (1 - (error / real))
-    accuracies = (1 - (abs(y_true - y_pred) / y_true)) * 100
+    # inverse-transform back to raw ratios for Mean_Accuracy_%
+    y_true_raw = np.exp(y_true)
+    y_pred_raw = np.exp(y_pred)
+
+    # percentage error
+    percentage_errors = np.abs((y_true_raw - y_pred_raw) / y_true_raw)
+
+    # convert to accuracy percentage
+    accuracies = np.maximum(0.0, (1.0 - percentage_errors)) * 100.0
     mean_accuracy = accuracies.mean()
 
     # BCa bootstrap 95% CI for accuracy
@@ -107,9 +115,12 @@ def run_regression_pipeline():
 
     # define output folder
     out_dir: str = os.path.join(project_path, 'data', '05_results', '06_regression', f'{model_algo}_regression')
+    os.makedirs(out_dir, exist_ok=True)
 
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
+    # SHAP and Optuna parameters are stored and can be retrieved to jump over the evaluation of those parameters
+    pred_file = os.path.join(out_dir, f'{model_algo}_predictions_Asymmetry_JT_Ratio_Total.csv')
+
+    if not os.path.exists(pred_file):
 
         # 1) load feature dataset
         features_path: str = os.path.join(project_path, 'data', '05_results', '04_classification', 'clean_features.csv')
@@ -125,6 +136,9 @@ def run_regression_pipeline():
 
         # get the reference scores merged with the features
         df_master, primary_target, target_columns = merge_features_with_targets(df_kinematics)
+
+        # !!!TEMPORARY FOR TESTING!!!
+        #target_columns = ['Asymmetry_JT_Ratio_BeanHandling']
 
         # 3) loop through targets
         for target_col in target_columns:

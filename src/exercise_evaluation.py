@@ -146,7 +146,7 @@ class ExerciseEvaluator:
             successful_taps: int = np.sum(valley_dist_arr < valid_dist)
             accuracy_percentage: float = float((successful_taps / len(valid_valley_idc)) * 100)
         else:
-            mean_target_error: float = 0.0
+            mean_target_error: float = np.nan
             accuracy_percentage: float = 0.0
 
         # 1.3) quality: assess rhythm with CoV (period time between taps), isolation (variance of other fingers)
@@ -185,7 +185,7 @@ class ExerciseEvaluator:
                 if start < end:
                     isolation_variances.append(np.var(dist_arr[start:end]))
 
-        isolation_score: float = float(np.mean(isolation_variances)) if isolation_variances else 0.0
+        isolation_score: float = float(np.mean(isolation_variances)) if isolation_variances else np.nan
 
         # 2) smoothness of movement (entropy)
         # get current passive side
@@ -387,11 +387,11 @@ class ExerciseEvaluator:
 
         # 1.5) task-dependent features
         levenshtein_acc: float = 0.0
-        levenshtein_err: float = 0.0
-        rhythm_cov: float = 0.0
-        contrib_ratio: float = 0.0
-        dwell_time: float = 0.0
-        smoothness: float = 0.0
+        levenshtein_err: float = np.nan
+        rhythm_cov: float = np.nan
+        contrib_ratio: float = np.nan
+        dwell_time: float = np.nan
+        smoothness: float = np.nan
 
         if len(resolved_taps) >= 2:
 
@@ -465,11 +465,11 @@ class ExerciseEvaluator:
                     sparc_scores.append(sparc_val)
 
             # average features across all valid taps
-            contrib_ratio = float(np.mean(contrib_ratios)) if contrib_ratios else 0.5
-            dwell_time = float(np.mean(dwell_times)) if dwell_times else 0.0
+            contrib_ratio = float(np.mean(contrib_ratios)) if contrib_ratios else np.nan
+            dwell_time = float(np.mean(dwell_times)) if dwell_times else np.nan
 
             # SPARC score is always negative (e.g., -1.5 is smoother than -4.2)
-            smoothness = float(np.mean(sparc_scores)) if sparc_scores else 0.0
+            smoothness = float(np.mean(sparc_scores)) if sparc_scores else np.nan
 
         # extract all four time series (from each finger pair)
         alt_tap_y: list = []
@@ -710,7 +710,7 @@ class ExerciseEvaluator:
                 dispersion_sec = np.std(rep_timing) / self.fps
                 dispersion_stds.append(dispersion_sec)
 
-        sync_dispersion: float = float(np.mean(dispersion_stds)) if dispersion_stds else 0.0
+        sync_dispersion: float = float(np.mean(dispersion_stds)) if dispersion_stds else np.nan
 
         # 2) smoothness of movement (entropy)
         passive_side_idx = 2 if active_side_idx == 1 else 1
@@ -853,11 +853,13 @@ class ExerciseEvaluator:
         # 1.3.1) the rotation rhythm is already given by the period CoV
 
         # 1.3.2) calculate the rotation stability - the larger the values of the other euler angles, the lower the score
-        x_stability_score: float = float(np.std(euler_x))
-        z_stability_score: float = float(np.std(euler_z))
-
         # the total out-of-plane compensation movement during the pronation-supination exercise
-        total_comp_score: float = x_stability_score + z_stability_score
+        if len(tot_active_rom) > 0:
+            x_stability_score: float = float(np.std(euler_x))
+            z_stability_score: float = float(np.std(euler_z))
+            total_comp_score: float = x_stability_score + z_stability_score
+        else:
+            total_comp_score = np.nan
 
         # 2) smoothness of movement (entropy)
         # get current passive side

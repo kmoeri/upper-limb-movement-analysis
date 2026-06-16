@@ -1416,14 +1416,24 @@ class Visualizer:
 
         plt.figure(figsize=(6, 5))
         cm = confusion_matrix(df['Real_Score'], (df['Predicted_Score'] > 0.5).astype('int'))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
-                    xticklabels=['Healthy (0)', 'Affected (1)'],
-                    yticklabels=['Healthy (0)', 'Affected (1)'],)
+        hm = sns.heatmap(cm, annot=True, annot_kws={"size": 20}, fmt='d', cmap='Blues', cbar=False,
+                         xticklabels=['Non-Paretic (0)', 'Paretic (1)'],
+                         yticklabels=['Non-Paretic (0)', 'Paretic (1)'],)
+        hm.set_xticklabels(hm.get_xticklabels(), fontsize=16)
+        hm.set_yticklabels(hm.get_yticklabels(), fontsize=16)
 
         # figure labels
-        plt.title(f'Confusion Matrix ({model_algo.upper()})', fontsize=18)
-        plt.xlabel('Predicted Label')
-        plt.ylabel('True Label')
+        title: str = ''
+        if model_algo.upper() == 'RF':
+            title = 'Random Forest'
+        elif model_algo.upper() == 'XGBOOST':
+            title = 'XGBoost'
+        elif model_algo.upper() == 'CATBOOST':
+            title = 'CatBoost'
+        plt.title(f'{title}', fontsize=18)
+        plt.xlabel('Predicted Label', fontsize=18)
+        plt.ylabel('True Label', fontsize=18)
+        plt.tight_layout()
 
         # save figure
         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_classification')
@@ -1516,6 +1526,25 @@ class Visualizer:
 
         plt.figure(figsize=(10, 8))
         sns.scatterplot(x=mean_scores, y=diff_scores, hue=df['Severity_Class'], s=100, palette='viridis')
+
+        # Add Participant IDs to the dots
+        for i in range(len(df)):
+            # Extract coordinates and ID
+            x_coord = mean_scores.iloc[i]
+            y_coord = diff_scores.iloc[i]
+            p_id = df['p_ID'].iloc[i]
+
+            # Annotate the plot
+            plt.annotate(
+                p_id,
+                (x_coord, y_coord),
+                textcoords="offset points",
+                xytext=(0, 6),  # Shift the text 6 pixels above the dot
+                ha='center',  # Horizontally center the text
+                fontsize=8,  # Keep the font small to prevent overlapping
+                alpha=0.75,  # Slight transparency so dots underneath remain visible
+                color='black'
+            )
 
         # horizontal bias and thresh
         plt.axhline(bias, color='black', linestyle='-', linewidth=2, label=f'Bias: {bias:.3f}')

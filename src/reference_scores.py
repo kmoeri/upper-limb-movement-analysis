@@ -52,13 +52,13 @@ def get_target_score_for_regression() -> tuple[pd.DataFrame, list[str]]:
                 # catch negative log() values
                 raise ValueError(f'\nError: Exercise times below 1.0 s detected in {aff_col} or {health_col}.')
 
-            # apply log transform for the time
-            log_aff = np.log(df_jt[aff_col] + 1e-8)
-            log_health = np.log(df_jt[health_col] + 1e-8)
-
             # calculate the asymmetry ratios (affected / healthy)
+            raw_asymmetry_ratio = df_jt[aff_col] / (df_jt[health_col] + 1e-8)
+
+            # apply log transform for the stopped time asymmetry ratios; cap all negative values at exactly 0.0
             ratio_col_name = f'Asymmetry_JT_Ratio_{subtest}'
-            df_jt[ratio_col_name] = log_aff / log_health
+            df_jt[ratio_col_name] = np.maximum(0.0, np.log(raw_asymmetry_ratio))
+
             ratio_columns.append(ratio_col_name)
 
         # calculate the total score (average of all six ratios)

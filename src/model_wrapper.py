@@ -170,43 +170,6 @@ class ModelWrapper:
         self.final_model = self._get_estimator(self.best_params)
         self.final_model.fit(X_reduced, y)
 
-        # # 1) hyperparameter tuning with optuna
-        # optuna.logging.set_verbosity(optuna.logging.WARNING)
-        # study = optuna.create_study(direction='minimize')
-        # study.optimize(lambda trial: self._optuna_objective(trial, X, y, groups), n_trials=self.n_trials)
-        # self.best_params = study.best_params
-        # self.study_best_value = study.best_value
-        #
-        # # 2) SHAP feature reduction
-        # # train model on all features
-        # interim_model = self._get_estimator(self.best_params)
-        # interim_model.fit(X, y)
-        #
-        # # extract SHAP values
-        # explainer = shap.TreeExplainer(interim_model)
-        #
-        # # classification may return list of arrays; regression usually returns one array
-        # shap_values = explainer.shap_values(X)
-        # if isinstance(shap_values, list):
-        #     shap_values = shap_values[1]        # get class 1 from 2D arrays [class_0, class_1]
-        # elif len(shap_values.shape) == 3:
-        #     shap_values = shap_values[:, :, 1]  # random forest may return 3D arrays (n_samples, n_features, n_classes)
-        #
-        # # calculate mean absolute SHAP value per feature
-        # mean_abs_shap = np.abs(shap_values).mean(axis=0)
-        # shap_importance = pd.DataFrame({'feature': X.columns,
-        #                                 'importance': mean_abs_shap}).sort_values(by='importance', ascending=False)
-        #
-        # # reduce to 'max_features'
-        # self.selected_features = shap_importance['feature'].head(max_features).tolist()
-        # print(f'Top {max_features} features selected via SHAP: {self.selected_features}')
-        #
-        # # 3) final model fit
-        # # refit the final model on best features
-        # X_reduced = X[self.selected_features]
-        # self.final_model = self._get_estimator(self.best_params)
-        # self.final_model.fit(X_reduced, y)
-
         return self
 
     def fit_with_predefined(self, X: pd.DataFrame, y: pd.Series, best_params: dict, selected_features: list[str]):

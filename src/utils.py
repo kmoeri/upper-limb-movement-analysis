@@ -812,12 +812,23 @@ class ToolBox:
             dict: Dictionary with descriptive statistics.
         """
 
+        # handle empty data
         if len(data) == 0:
-            return {f'{prefix}_mean': 0.0, f'{prefix}_pct_90': 0.0, f'{prefix}_cov': 0.0}
+            is_magnitude = any(x in prefix for x in ['amplitude', 'velocity_pos', 'velocity_neg'])
+            return {f'{prefix}_mean': 0.0 if is_magnitude else np.nan,
+                    f'{prefix}_pct_90': 0.0 if is_magnitude else np.nan,
+                    f'{prefix}_cov': np.nan}    # CoV needs to be NaN since 0.0 would be the best value
+
+        # handle valid data
+        if len(data) > 1 and float(np.mean(data)) != 0.0:
+            cov_val = round((float(np.std(data)) / float(np.mean(data))), 3)
+        else:
+            cov_val = np.nan
+
         return {
             f'{prefix}_mean': round(float(np.mean(data)), 3),
             f'{prefix}_pct_90': round(np.percentile(data, 90), 3),
-            f'{prefix}_cov': round((float(np.std(data)) / float(np.mean(data))) if np.mean(data) != 0.0 else 0.0, 3)
+            f'{prefix}_cov': cov_val
         }
 
     @staticmethod

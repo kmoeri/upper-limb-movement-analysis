@@ -233,11 +233,11 @@ class KinematicFeatures:
             cfg.update(custom_cfg)
 
         features = {'repetition_freq': 0.0, 'repetition_num': 0.0,
-                    'period_mean': 0.0, 'period_pct_90': 0.0, 'period_cov': 0.0,
-                    'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': 0.0,
-                    'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': 0.0,
-                    'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': 0.0,
-                    'velocity_ratio_mean': 0.0, 'velocity_ratio_pct_90': 0.0, 'velocity_ratio_cov': 0.0,
+                    'period_mean': np.nan, 'period_pct_90': np.nan, 'period_cov': np.nan,
+                    'amplitude_mean': 0.0, 'amplitude_pct_90': 0.0, 'amplitude_cov': np.nan,
+                    'velocity_pos_mean': 0.0, 'velocity_pos_pct_90': 0.0, 'velocity_pos_cov': np.nan,
+                    'velocity_neg_mean': 0.0, 'velocity_neg_pct_90': 0.0, 'velocity_neg_cov': np.nan,
+                    'velocity_ratio_mean': np.nan, 'velocity_ratio_pct_90': np.nan, 'velocity_ratio_cov': np.nan,
                     'extraction_status': 'failed',
                     'valid_peaks_idx': [],
                     'valid_valleys_idx': []}
@@ -491,7 +491,7 @@ class KinematicFeatures:
 
         # safety: for zero movement
         if pat_len == 0:
-            return 0, 0.0, 0
+            return 0, np.nan, 0
 
         # template of possible target tapping sequences - one full repetition
         target_templates = [
@@ -551,7 +551,7 @@ class KinematicFeatures:
 
         # skip for profiles that are too short for spectral analysis
         if len(velocity_profile) < 5:
-            return 0.0
+            return np.nan
 
         # number of points for FFT with zero-padding
         nfft = int(pow(2, np.ceil(np.log2(len(velocity_profile))) + pad_level))
@@ -563,7 +563,7 @@ class KinematicFeatures:
         vf = np.abs(np.fft.fft(velocity_profile, nfft))
         vf_max = np.max(vf)
         if vf_max == 0:
-            return 0.0
+            return np.nan
         vf = vf / vf_max
 
         # find dynamic cutoff frequency index (where amplitude drops below threshold)
@@ -571,7 +571,7 @@ class KinematicFeatures:
         fc_idx = idx_fc[-1] if len(idx_fc) > 0 else 0
 
         if fc_idx == 0:
-            return 0.0
+            return np.nan
 
         f_sel = f[:fc_idx + 1]
         vf_sel = vf[:fc_idx + 1]
