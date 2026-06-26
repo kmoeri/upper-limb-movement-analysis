@@ -1,5 +1,5 @@
 # src/visualization.py
-
+import json
 # libraries
 import os
 import shap
@@ -14,7 +14,8 @@ import matplotlib.gridspec as gridspec
 import matplotlib.animation as animation
 from matplotlib.lines import Line2D
 from scipy import stats
-from sklearn.metrics import confusion_matrix
+from sklearn.utils import resample
+from sklearn.metrics import confusion_matrix, r2_score, roc_curve, auc
 
 # modules
 from src.config import config, project_path
@@ -1440,6 +1441,181 @@ class Visualizer:
         plt.savefig(os.path.join(model_dir, f'{model_algo}_confusion_matrix.png'), dpi=600)
         plt.close()
 
+    @staticmethod
+    def viz_roc_curve(df: pd.DataFrame, model_algo: str, target: str, out_dir: str, n_bootstraps: int = 1000) -> None:
+        """
+        Plots the Receiver Operating Characteristic (ROC) curve for pooled Out-Of-Fold predictions
+        with AUC 95% Confidence Intervals.
+        """
+        if 'Predicted_Score' not in df.columns or 'Real_Score' not in df.columns:
+            print("Required columns missing for ROC curve.")
+            return
+
+        y_true = df['Real_Score'].values
+        y_prob = df['Predicted_Score'].values
+
+        # 1) Calculate the main ROC curve
+        fpr, tpr, thresholds = roc_curve(y_true, y_prob)
+        roc_auc = auc(fpr, tpr)
+
+        # 2) Bootstrap the 95% Confidence Interval for the band AND the AUC score
+        fpr_grid = np.unique(np.concatenate(([0.0, 1.0], fpr)))
+        tpr_bootstraps = []
+        auc_bootstraps = []
+
+        for _ in range(n_bootstraps):
+            indices = resample(np.arange(len(y_true)), replace=True)
+            y_true_b = y_true[indices]
+            y_prob_b = y_prob[indices]
+
+            if len(np.unique(y_true_b)) < 2:
+                continue
+
+            fpr_b, tpr_b, _ = roc_curve(y_true_b, y_prob_b)
+
+            auc_bootstraps.append(auc(fpr_b, tpr_b))
+
+            idx = np.searchsorted(fpr_b, fpr_grid, side='right') - 1
+            idx = np.clip(idx, 0, len(tpr_b) - 1)
+            tpr_interp = tpr_b[idx]
+            tpr_bootstraps.append(tpr_interp)
+
+        # Calculate percentiles for the Band
+        tpr_lower = np.percentile(tpr_bootstraps, 2.5, axis=0)
+        tpr_upper = np.percentile(tpr_bootstraps, 97.5, axis=0)
+
+        auc_lower = np.percentile(auc_bootstraps, 2.5)
+        auc_upper = np.percentile(auc_bootstraps, 97.5)
+
+        # Bypasses the buggy step='post' in fill_between by manually duplicating
+        # the coordinates to create perfect rigid geometric steps.
+        fpr_step = np.repeat(fpr_grid, 2)[1:]
+        tpr_lower_step = np.repeat(tpr_lower, 2)[:-1]
+        tpr_upper_step = np.repeat(tpr_upper, 2)[:-1]
+
+        # 3) Plotting
+        plt.figure(figsize=(8, 6))
+
+        # Plot the CI band using the manual step arrays
+        plt.fill_between(fpr_step, tpr_lower_step, tpr_upper_step, color='#AED6F6', alpha=0.5, label='95% CI')
+
+        # Plot the main curve
+        plt.plot(fpr, tpr, color='#1B4F72', lw=2.5,
+                 label=f'Pooled OOF ROC (AUC = {roc_auc:.2f} [{auc_lower:.2f} - {auc_upper:.2f}])',
+                 drawstyle='steps-post')
+
+        plt.plot([0, 1], [0, 1], color='#7F8C8D', lw=2, linestyle='--', alpha=0.8, label='Chance (AUC = 0.5)')
+
+        plt.xlim([-0.05, 1.05])
+        plt.ylim([-0.05, 1.05])
+        plt.xlabel('False Positive Rate', fontsize=12)
+        plt.ylabel('True Positive Rate', fontsize=12)
+        plt.title(f'ROC Curve: {model_algo.upper()} ({target})', fontsize=16, pad=15)
+        plt.legend(loc="lower right", fontsize=12)
+        plt.grid(True, linestyle=':', alpha=0.6)
+
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f'{model_algo}_roc_curve_{target}.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        plt.close()
+        print(f"ROC Curve saved to {out_path}")
+
+    def viz_combined_roc_curve(self, predictions_dict: dict, target: str, out_dir: str,
+                               n_bootstraps: int = 1000) -> None:
+        """
+        Plots a combined Receiver Operating Characteristic (ROC) curve for multiple models
+        with highly transparent overlapping 95% Confidence Intervals.
+
+        Args:
+            predictions_dict (dict): Dictionary mapping model display names to their out-of-fold prediction DataFrames.
+                                     Example: {'Random Forest': df_rf, 'XGBoost': df_xgb, 'CatBoost': df_cat}
+        """
+        plt.figure(figsize=(9, 7))
+
+        # High-contrast color palette for scientific publication
+        line_colors = ['#1B4F72', '#D35400', '#27AE60']  # Navy, Rust Orange, Emerald Green
+        band_colors = ['#AED6F6', '#F5CBA7', '#ABEBC6']  # Light Blue, Light Orange, Light Green
+
+        for idx, (model_name, df) in enumerate(predictions_dict.items()):
+            if 'Predicted_Score' not in df.columns or 'Real_Score' not in df.columns:
+                print(f"Required columns missing for {model_name}. Skipping.")
+                continue
+
+            y_true = df['Real_Score'].values
+            y_prob = df['Predicted_Score'].values
+
+            # 1) Calculate the main ROC curve
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = auc(fpr, tpr)
+
+            # 2) Bootstrap the 95% Confidence Interval for the band AND the AUC score
+            fpr_grid = np.unique(np.concatenate(([0.0, 1.0], fpr)))
+            tpr_bootstraps = []
+            auc_bootstraps = []
+
+            for _ in range(n_bootstraps):
+                indices = resample(np.arange(len(y_true)), replace=True)
+                y_true_b = y_true[indices]
+                y_prob_b = y_prob[indices]
+
+                if len(np.unique(y_true_b)) < 2:
+                    continue
+
+                fpr_b, tpr_b, _ = roc_curve(y_true_b, y_prob_b)
+                auc_bootstraps.append(auc(fpr_b, tpr_b))
+
+                idx_search = np.searchsorted(fpr_b, fpr_grid, side='right') - 1
+                idx_search = np.clip(idx_search, 0, len(tpr_b) - 1)
+                tpr_interp = tpr_b[idx_search]
+                tpr_bootstraps.append(tpr_interp)
+
+            # Calculate percentiles
+            tpr_lower = np.percentile(tpr_bootstraps, 2.5, axis=0)
+            tpr_upper = np.percentile(tpr_bootstraps, 97.5, axis=0)
+            auc_lower = np.percentile(auc_bootstraps, 2.5)
+            auc_upper = np.percentile(auc_bootstraps, 97.5)
+
+            # 3) Manual Step Conversion (Fixes the polygon rendering bug)
+            fpr_step = np.repeat(fpr_grid, 2)[1:]
+            tpr_lower_step = np.repeat(tpr_lower, 2)[:-1]
+            tpr_upper_step = np.repeat(tpr_upper, 2)[:-1]
+
+            # 4) Plot this model's band and line
+            c_idx = idx % len(line_colors)
+
+            # Lower alpha (0.2) so overlaps don't become completely opaque
+            plt.fill_between(fpr_step, tpr_lower_step, tpr_upper_step, color=band_colors[c_idx], alpha=0.2)
+
+            plt.plot(fpr, tpr, color=line_colors[c_idx], lw=2.5,
+                     label=f'{model_name} (AUC = {roc_auc:.2f} [{auc_lower:.2f} - {auc_upper:.2f}])',
+                     drawstyle='steps-post')
+
+        # Add the chance line
+        plt.plot([0, 1], [0, 1], color='#7F8C8D', lw=2, linestyle='--', alpha=0.8, label='Chance (AUC = 0.5)')
+
+        # Formatting
+        plt.xlim([-0.05, 1.05])
+        plt.ylim([-0.05, 1.05])
+        plt.xlabel('False Positive Rate', fontsize=14)
+        plt.ylabel('True Positive Rate', fontsize=14)
+        plt.title(f'Model Consensus: ROC Curves ({target})', fontsize=18, pad=15)
+
+        # Move legend outside slightly or keep it bottom right, adjusted for clarity
+        plt.legend(loc="lower right", fontsize=11, framealpha=0.9)
+        plt.grid(True, linestyle=':', alpha=0.6)
+
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f'combined_roc_curve_{target}.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        plt.close()
+        print(f"Combined ROC Curve saved to {out_path}")
+
     # ============================================================================= #
     #                           6) REGRESSION                                       #
     # ============================================================================= #
@@ -1573,77 +1749,142 @@ class Visualizer:
         top_cols = mean_abs_shap.nlargest(10).index.tolist()
         rest_cols = [c for c in common_cols if c not in top_cols]
 
-        df_shap_plot = pd.DataFrame()
-        df_feat_plot = pd.DataFrame()
         plot_cols = []
+        plot_values = []
         pct_dict = {}
 
-        # add top features fist (index 0 is the top of the graph)
         for col in top_cols:
-            col_pct = (mean_abs_shap[col] / total_impact) * 100
-
-            df_shap_plot[col] = df_shap[col]
-            df_feat_plot[col] = df_feat[col]
-
             plot_cols.append(col)
-            pct_dict[col] = f'{col_pct:.1f}%'
+            plot_values.append(mean_abs_shap[col])
+            pct_dict[col] = f'{(mean_abs_shap[col] / total_impact) * 100:.1f}%'
 
-        # add the 'rest' aggregate last (bottom of the graph)
         if rest_cols:
             rest_impact = mean_abs_shap[rest_cols].sum()
-            rest_pct = (rest_impact / total_impact) * 100
             rest_label = f'Sum of {len(rest_cols)} other features'
-
-            # bar length equal the aggregated absolute impact
-            df_shap_plot[rest_label] = rest_impact
-            df_feat_plot[rest_label] = 0.0
-
             plot_cols.append(rest_label)
-            pct_dict[rest_label] = f'{rest_pct:.1f}%'
+            plot_values.append(rest_impact)
+            pct_dict[rest_label] = f'{(rest_impact / total_impact) * 100:.1f}%'
+
+        # Reverse lists because horizontal bar charts plot from bottom to top
+        plot_cols.reverse()
+        plot_values.reverse()
 
         plt.figure(figsize=(10, 7))
-        shap.summary_plot(df_shap_plot[plot_cols].values,
-                          features=df_feat_plot[plot_cols],
-                          feature_names=plot_cols,
-                          plot_type='bar',
-                          max_display=len(plot_cols),
-                          color='#B1E0D9',
-                          sort=False,  # top-down list order
-                          show=False)
-
         ax = plt.gca()
-        x_max = ax.get_xlim()[1]
-        x_offset = x_max * 0.015
 
-        # map percentages to the corresponding bars
-        y_labels = [tick.get_text() for tick in ax.get_yticklabels()]
+        # Draw native matplotlib bars (Color matched to ROC Curve CI band)
+        bars = ax.barh(plot_cols, plot_values, color='#AED6F6', alpha=0.9, height=0.6)
 
-        for i, patch in enumerate(ax.patches):
-            if i < len(y_labels):
-                feature_name = y_labels[i]
-                if feature_name in pct_dict:
-                    y_center = patch.get_y() + patch.get_height() / 2
-                    ax.text(x_offset, y_center, pct_dict[feature_name],
-                            va='center', ha='left',
-                            color='black', fontsize=12)
+        # --- PERCENTAGE LABELS (COMMENTED OUT FOR MANUSCRIPT) ---
+        # x_offset = max(plot_values) * 0.015
+        # for bar, col in zip(bars, plot_cols):
+        #     y_center = bar.get_y() + bar.get_height() / 2
+        #     ax.text(x_offset, y_center, pct_dict[col],
+        #             va='center', ha='left', color='black', fontsize=12)
+        # --------------------------------------------------------
 
         target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
 
-        # pad=60 added to match the height compression of the Beeswarm plot
         plt.title(f'SHAP Global Feature Importance: {target_exercise_name} ({model_algo.upper()})', fontsize=18, pad=45)
-        plt.xlabel('Mean |SHAP value| (feature attribution)', fontsize=14)
+
+        # Updated X-axis to correctly reflect SHAP mathematics instead of probabilities
+        plt.xlabel('Mean |SHAP value| (Impact on Model Output)', fontsize=14)
+
+        plt.tick_params(axis='y', labelsize=12)
+        plt.tick_params(axis='x', labelsize=11)
+
+        # Clean borders
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
         plt.tight_layout()
 
         # save plot
         if task_type == 'classification':
             model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
         else:
-            # regression
             model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
 
         f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
         plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
+
+    @staticmethod
+    def viz_combined_shap_consensus(shap_dict: dict, target: str, out_dir: str, top_n: int = 10) -> None:
+        """
+        Creates a grouped SHAP bar chart comparing feature importance across multiple models.
+        Converts absolute SHAP to Relative Percentage Impact to safely compare different architectures.
+
+        Args:
+            shap_dict (dict): Dictionary format {'Model Name': df_shap} e.g., {'XGBoost': df_xgb, ...}
+
+        """
+        model_names = list(shap_dict.keys())
+
+        # calculate relative impact in percentages
+        relative_impacts = {}
+        for name, df in shap_dict.items():
+            mean_abs_shap = df.abs().mean(axis=0)
+            rel_pct = (mean_abs_shap / mean_abs_shap.sum()) * 100
+            relative_impacts[name] = rel_pct
+
+        # combine and fill missing features with 0.0%
+        df_compare = pd.DataFrame(relative_impacts).fillna(0.0)
+        df_compare['Ensemble_Mean'] = df_compare.mean(axis=1)
+
+        # export full ranked dataset
+        df_export = df_compare.copy()
+
+        # add rank columns for each model (1 is highest impact)
+        for name in model_names:
+            df_export[f'{name}_Rank'] = df_export[name].rank(ascending=False, method='min').astype(int)
+        df_export['Ensemble_Rank'] = df_export['Ensemble_Mean'].rank(ascending=False, method='min').astype(int)
+
+        # sort the export file by the 'Ensemble_Mean' from highest to lowest
+        df_export = df_export.sort_values(by='Ensemble_Mean', ascending=False)
+
+        # save as CSV
+        df_export.to_csv(os.path.join(out_dir, f'combined_shap_consensus_data_{target}.csv'))
+
+        # extract top n for plotting
+        df_top = df_compare.nlargest(top_n, 'Ensemble_Mean').drop(columns=['Ensemble_Mean'])
+        df_top = df_top.sort_values(by=model_names[0], ascending=True)
+        features = df_top.index.tolist()
+
+        # plot config
+        plt.figure(figsize=(10, 8))
+        ax = plt.gca()
+        y = np.arange(len(features))
+        bar_width = 0.25
+        colors = ['#1B4F72', '#2980B9', '#AED6F6']
+
+        # draw the grouped bars
+        for idx, model_name in enumerate(model_names):
+            y_pos = y + (idx - 1) * bar_width
+            ax.barh(y_pos, df_top[model_name], height=bar_width,
+                    color=colors[idx % len(colors)], alpha=0.9, label=model_name)
+
+        # formatting
+        ax.set_yticks(y)
+        ax.set_yticklabels(features, fontsize=12)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f'{x:.0f}%'))
+
+        plt.xlabel('Relative Feature Impact [%]', fontsize=14)
+        plt.title(f'Top {top_n} Features Across Models', fontsize=18, pad=20)
+        handles, labels = ax.get_legend_handles_labels()
+        order = [2,1,0]
+        plt.legend(handles=[handles[idx] for idx in order], labels=[labels[idx] for idx in order],
+                   loc='lower right', fontsize=12, framealpha=0.9)
+        #plt.legend(loc='lower right', fontsize=12, framealpha=0.9)
+        plt.grid(True, axis='x', linestyle=':', alpha=0.6)
+
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f'combined_shap_consensus_{target}.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        plt.close()
+        print(f"Combined Consensus SHAP Plot saved to {out_path}")
 
     def viz_regression_shap_beeswarm(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
                                      model_algo: str, f_path: str, task_type: str) -> None:
@@ -1772,3 +2013,401 @@ class Visualizer:
     #     f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
     #     plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
     #     plt.close()
+
+    def viz_regression_feature_stability_boxplot(self, model_algo: str, f_path: str, task_type: str) -> None:
+
+        if not os.path.exists(f_path):
+            print(f'SHAP file missing: {f_path}')
+            return
+
+        # clean IDs before calculation
+        df_shap = pd.read_csv(f_path)
+        if 'Fold' not in df_shap.columns:
+            print('Fold column missing from SHAP data. Feature stability plotting failed ...')
+            return
+
+        if 'p_ID' in df_shap.columns:
+            df_shap = df_shap.drop(columns=['p_ID'])
+
+        # transform from wide to long format: [Fold, Feature, SHAP_Value]
+        df_melted = df_shap.melt(id_vars=['Fold'], var_name='Feature', value_name='SHAP_Value')
+
+        # calculate the absolute SHAP value (impact magnitude)
+        df_melted['Abs_SHAP'] = df_melted['SHAP_Value'].abs()
+
+        # calculate the mean absolute SHAP for each feature within each fold
+        fold_importance = df_melted.groupby(['Fold', 'Feature'])['Abs_SHAP'].mean().reset_index()
+
+        # calculate the overall mean across all folds to identify the top 10
+        overall_importance = fold_importance.groupby('Feature')['Abs_SHAP'].mean().sort_values(ascending=False)
+        top_10_features = overall_importance.head(10).index.tolist()
+
+        # filter the plot data to only include the top 10 features
+        plot_data = fold_importance[fold_importance['Feature'].isin(top_10_features)].copy()
+
+        # enforce categorical ordering so the best feature is always at the top (y-axis)
+        plot_data['Feature'] = pd.Categorical(plot_data['Feature'], categories=top_10_features, ordered=True)
+
+        # plotting
+        plt.figure(figsize=(10, 7))
+
+        # boxplot
+        sns.boxplot(data=plot_data, x='Abs_SHAP', y='Feature', color='#B1E0D9', showmeans=True,
+                    meanprops={'marker':'o', 'markerfacecolor':'white', 'markeredgecolor':'black', 'markersize':'6'})
+
+        # overlay the 5 specific fold dots on top of the boxes
+        sns.stripplot(data=plot_data, x='Abs_SHAP', y='Feature', color='#2C3E50', alpha=0.7, size=6, jitter=False)
+
+        target_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+
+        plt.title(f'Feature Stability Across Folds: {target_name} ({model_algo.upper()})', fontsize=18, pad=15)
+        plt.xlabel('Mean |SHAP value| per fold', fontsize=14)
+        plt.ylabel('', fontsize=14)
+        plt.grid(True, axis='x', linestyle=':', alpha=0.6)
+
+        sns.despine()
+        plt.tight_layout()
+
+        # save data
+        if task_type == 'classification':
+            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+        else:
+            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+
+        f_basename: str = f'{model_algo}_shap_stability_{target_name}.png'
+        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
+        plt.close()
+
+    # def viz_regression_generalization_gap(self, res_dir: str, model_algo: str, task_type: str) -> None:
+    #
+    #     # read the compiled metrics table
+    #     metrics_file = os.path.join(res_dir, f'{model_algo}_metrics.csv')
+    #     if not os.path.exists(metrics_file):
+    #         print(f"Metrics file missing for {model_algo}. Cannot plot generalization gap.")
+    #         return
+    #
+    #     df_metrics = pd.read_csv(metrics_file)
+    #
+    #     # ensure training metrics were tracked
+    #     if 'Train_R2 (Mean±STD)' not in df_metrics.columns:
+    #         print("Training metrics missing. Cannot plot generalization gap.")
+    #         return
+    #
+    #     # clean subtest names for a cleaner y-axis
+    #     df_metrics['Subtest'] = df_metrics['Target'].str.replace('Asymmetry_JT_Ratio_', '')
+    #
+    #     # filter out N/A rows and extract the numeric train R2 mean from the string "0.750 ± 0.020"
+    #     df_metrics = df_metrics[df_metrics['Train_R2 (Mean±STD)'] != 'N/A'].copy()
+    #     if df_metrics.empty:
+    #         return
+    #
+    #     df_metrics['Train_R2'] = df_metrics['Train_R2 (Mean±STD)'].apply(lambda x: float(str(x).split(' ')[0]))
+    #     df_metrics['Val_R2'] = df_metrics['R2']
+    #
+    #     # sort by validation R2 to make the chart flow
+    #     df_metrics = df_metrics.sort_values(by='Val_R2', ascending=True)
+    #
+    #     # plotting
+    #     plt.figure(figsize=(10, 7))
+    #
+    #     # draw the connecting lines representing the "gap"
+    #     for i, row in df_metrics.iterrows():
+    #         plt.plot([row['Train_R2'], row['Val_R2']], [row['Subtest'], row['Subtest']],
+    #                  color='grey', zorder=1, linestyle='-', alpha=0.5, linewidth=2)
+    #
+    #     # plot the train and validation dots
+    #     plt.scatter(df_metrics['Train_R2'], df_metrics['Subtest'], color='#2C3E50',
+    #                 label='Train R² (Mean)', zorder=2, s=120, edgecolors='black')
+    #     plt.scatter(df_metrics['Val_R2'], df_metrics['Subtest'], color='#E74C3C',
+    #                 label='Validation R² (Pooled OOF)', zorder=3, s=120, edgecolors='black')
+    #
+    #     plt.title(f'Generalization Gap: Train vs. Validation R² ({model_algo.upper()})', fontsize=18, pad=15)
+    #     plt.xlabel('R² Score (Higher is better)', fontsize=14)
+    #     plt.ylabel('', fontsize=14)
+    #     plt.legend(loc='lower right', framealpha=1.0, fontsize=12)
+    #     plt.grid(True, axis='x', linestyle=':', alpha=0.6)
+    #
+    #     # remove top and right borders
+    #     plt.gca().spines['top'].set_visible(False)
+    #     plt.gca().spines['right'].set_visible(False)
+    #
+    #     plt.tight_layout()
+    #
+    #     # save data
+    #     if task_type == 'classification':
+    #         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+    #     else:
+    #         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+    #
+    #     out_path = os.path.join(model_dir, f'{model_algo}_generalization_gap.png')
+    #     plt.savefig(out_path, dpi=600, bbox_inches='tight', pad_inches=0.2)
+    #     plt.close()
+
+    # ============================================================================= #
+    #                           7) Utility                                          #
+    # ============================================================================= #
+
+    def viz_regression_generalization_gap(self, res_dir: str, model_algo: str, task_type: str) -> None:
+
+        # dynamically find all targets evaluated in this folder
+        targets = [f.split(f'{model_algo}_predictions_')[1].replace('.csv', '')
+                   for f in os.listdir(res_dir) if f.startswith(f'{model_algo}_predictions_')]
+
+        if not targets:
+            print(f"No prediction files found for {model_algo}. Cannot plot generalization gap.")
+            return
+
+        plt.figure(figsize=(10, 8))
+
+        # store averages for sorting the y-axis later
+        plot_data = []
+
+        # extract fold-level data for each target
+        for target in targets:
+            subtest_name = target.replace('Asymmetry_JT_Ratio_', '')
+
+            train_file = os.path.join(res_dir, f'{model_algo}_fold_train_metrics_{target}.csv')
+            pred_file = os.path.join(res_dir, f'{model_algo}_predictions_{target}.csv')
+
+            if not os.path.exists(train_file) or not os.path.exists(pred_file):
+                continue
+
+            df_train = pd.read_csv(train_file)
+            df_pred = pd.read_csv(pred_file)
+
+            fold_train_r2 = []
+            fold_val_r2 = []
+
+            # calculate metrics per fold
+            for fold in sorted(df_pred['Fold'].unique()):
+                df_fold_preds = df_pred[df_pred['Fold'] == fold]
+
+                # calculate Test R2 for this specific fold
+                val_r2 = r2_score(df_fold_preds['Real_Score'], df_fold_preds['Predicted_Score'])
+                fold_val_r2.append(val_r2)
+
+                # extract Train R2 for this specific fold
+                t_r2 = df_train[df_train['Fold'] == fold]['Train_R2'].values[0]
+                fold_train_r2.append(t_r2)
+
+            mean_tr2 = np.mean(fold_train_r2)
+            mean_vr2 = np.mean(fold_val_r2)
+
+            plot_data.append({
+                'subtest': subtest_name,
+                'train_r2_list': fold_train_r2,
+                'val_r2_list': fold_val_r2,
+                'mean_train_r2': mean_tr2,
+                'mean_val_r2': mean_vr2
+            })
+
+        # sort by mean validation R2 for a clean visual flow
+        plot_data = sorted(plot_data, key=lambda x: x['mean_val_r2'])
+
+        # plotting
+        for y_pos, data in enumerate(plot_data):
+
+            # 1) Plot the faint individual folds (alpha=0.3)
+            for tr2, vr2 in zip(data['train_r2_list'], data['val_r2_list']):
+                plt.plot([tr2, vr2], [y_pos, y_pos], color='grey', alpha=0.3, linewidth=1, zorder=1)
+                plt.scatter(tr2, y_pos, color='#2C3E50', alpha=0.3, s=40, zorder=2)
+                plt.scatter(vr2, y_pos, color='#E74C3C', alpha=0.3, s=40, zorder=2)
+
+            # 2) Plot the bold average line
+            plt.plot([data['mean_train_r2'], data['mean_val_r2']], [y_pos, y_pos],
+                     color='black', alpha=0.8, linewidth=2.5, zorder=3)
+
+            # 3) Plot the bold average dots
+            plt.scatter(data['mean_train_r2'], y_pos, color='#2C3E50',
+                        s=140, edgecolors='black', zorder=4, label='Train R² (Mean)' if y_pos == 0 else "")
+            plt.scatter(data['mean_val_r2'], y_pos, color='#E74C3C',
+                        s=140, edgecolors='black', zorder=4, label='Test R² (Mean)' if y_pos == 0 else "")
+
+        # formatting
+        plt.yticks(range(len(plot_data)), [d['subtest'] for d in plot_data])
+        plt.title(f'Generalization Gap by Fold: Train vs. Test R² ({model_algo.upper()})', fontsize=16, pad=15)
+        plt.xlabel('R² Score (Higher is better)', fontsize=14)
+        plt.legend(loc='upper left', framealpha=1.0, fontsize=12)
+        plt.grid(True, axis='x', linestyle=':', alpha=0.6)
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+        plt.tight_layout()
+
+        # save data
+        out_dir = os.path.join(self.regression_res_path if task_type == 'regression' else self.classification_res_path,
+                               f'{model_algo}_{task_type}')
+        os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(os.path.join(out_dir, f'{model_algo}_generalization_gap_folds.png'), dpi=600, bbox_inches='tight')
+        plt.close()
+
+    def viz_regression_split_distribution(self, df_train: pd.DataFrame, df_test: pd.DataFrame, target_col: str,
+                                          model_algo: str, task_type: str) -> None:
+
+        plt.figure(figsize=(10, 7))
+
+        # plot training distribution (from the main df target column)
+        sns.histplot(df_train[target_col], color='#2C3E50', label='Training Set Pool',
+                     stat='density', kde=True, alpha=0.4, bins=15, edgecolor='black')
+
+        # plot test (OOF) distribution (from the OOF results 'Real_Score' column)
+        sns.histplot(df_test['Real_Score'], color='#E74C3C', label='Test Set (OOF)',
+                     stat='density', kde=True, alpha=0.5, bins=15, edgecolor='black')
+
+        # clean target name for the title
+        clean_target = target_col.replace('Asymmetry_JT_Ratio_', '')
+
+        plt.title(f'Target Distribution Match: {clean_target} ({model_algo.upper()})', fontsize=18, pad=15)
+        plt.xlabel('JTHFT Asymmetry Ratio', fontsize=14)
+        plt.ylabel('Density', fontsize=14)
+        plt.legend(fontsize=12)
+        plt.grid(True, axis='both', linestyle=':', alpha=0.6)
+
+        # remove top and right borders
+        plt.gca().spines['top'].set_visible(False)
+        plt.gca().spines['right'].set_visible(False)
+
+        plt.tight_layout()
+
+        if task_type == 'classification':
+            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+        else:
+            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+
+        f_basename = f'{model_algo}_distribution_check_{target_col}.png'
+        out_path = os.path.join(model_dir, f_basename)
+        plt.savefig(out_path, dpi=600, bbox_inches='tight', pad_inches=0.2)
+        plt.close()
+
+    @staticmethod
+    def viz_regression_fold_distributions(df_oof: pd.DataFrame, target_col: str, model_algo: str,
+                                          out_dir: str) -> None:
+        # Verify the Fold column exists
+        if 'Fold' not in df_oof.columns:
+            print("Fold column missing from OOF data. Cannot plot fold distributions.")
+            return
+
+        folds = sorted(df_oof['Fold'].unique())
+        n_folds = len(folds)
+
+        # Create a 1x5 grid of subplots
+        fig, axes = plt.subplots(1, n_folds, figsize=(4 * n_folds, 5), sharey=True, sharex=True)
+
+        for i, fold in enumerate(folds):
+            ax = axes[i]
+
+            # Test data: The patients in THIS fold
+            test_reals = df_oof[df_oof['Fold'] == fold]['Real_Score']
+
+            # Train data: The patients in ALL OTHER folds
+            train_reals = df_oof[df_oof['Fold'] != fold]['Real_Score']
+
+            # Plot KDEs
+            sns.kdeplot(train_reals, ax=ax, color='#2C3E50', fill=True, alpha=0.4, label='Train', linewidth=2)
+            sns.kdeplot(test_reals, ax=ax, color='#E74C3C', fill=True, alpha=0.5, label='Test', linewidth=2)
+
+            ax.set_title(f'Fold {fold} (Test n={len(test_reals)})', fontsize=12)
+            ax.set_xlabel('JTHFT Asymmetry Ratio')
+
+            # Formatting
+            if i == 0:
+                ax.set_ylabel('Density', fontsize=12)
+            if i == n_folds - 1:
+                ax.legend(loc='upper right')
+
+            ax.grid(True, linestyle=':', alpha=0.6)
+
+        plt.suptitle(f'Fold-by-Fold Covariate Shift Check: {target_col} ({model_algo.upper()})', fontsize=16, y=1.05)
+        sns.despine()
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f'{model_algo}_fold_distributions_{target_col}.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def viz_regression_learning_curves(log_filepath: str, out_dir: str) -> None:
+        """
+        Reads the DataLogger JSON file and plots the train vs validation loss curves for each exercise across all folds.
+        """
+        if not os.path.exists(log_filepath):
+            print(f'Log file not found: {log_filepath}')
+            return
+
+        with open(log_filepath, 'r') as f:
+            data = json.load(f)
+
+        model_algo = data.get('Metadata', {}).get('Algorithm', 'Unknown')
+        target = data.get('Metadata', {}).get('Target', 'Unknown')
+        folds_data = data.get('Outer_Folds', {})
+
+        # extract unique exercises dynamically
+        exercises = set()
+        for fold_val in folds_data.values():
+            exercises.update(fold_val.get('Exercises', {}).keys())
+
+        exercises = sorted(list(exercises))
+        if not exercises:
+            print('No learning curve data found in log.')
+            return
+
+        # set up a dynamic grid of subplots (1 row, N columns)
+        fig, axes = plt.subplots(1, len(exercises), figsize=(5 * len(exercises), 5))
+        if len(exercises) == 1:
+            axes = [axes]
+
+        for ax, ex_name in zip(axes, exercises):
+            all_train = []
+            all_val = []
+            metric = 'Loss'
+
+            # get arrays from all folds
+            for fold_val in folds_data.values():
+                lc = fold_val.get('Exercises', {}).get(ex_name, {}).get('Learning_Curve')
+                if lc:
+                    all_train.append(lc['Train_Loss'])
+                    all_val.append(lc['Val_Loss'])
+                    metric = lc.get('Metric', 'Loss')
+
+            if not all_train:
+                ax.set_title(f'{ex_name} (No Data)')
+                continue
+
+            # handle varying tree counts (Optuna picks different n_estimators per fold)
+            # forward-fill the last loss value to match the longest fold
+            max_len = max(len(arr) for arr in all_train)
+            padded_train = [arr + [arr[-1]] * (max_len - len(arr)) for arr in all_train]
+            padded_val = [arr + [arr[-1]] * (max_len - len(arr)) for arr in all_val]
+
+            # calculate means
+            mean_train = np.mean(padded_train, axis=0)
+            mean_val = np.mean(padded_val, axis=0)
+            x_axis = range(1, max_len + 1)
+
+            # plot faint individual fold lines
+            for t_arr, v_arr in zip(padded_train, padded_val):
+                ax.plot(x_axis, t_arr, color='#2C3E50', alpha=0.15, linewidth=1)
+                ax.plot(x_axis, v_arr, color='#E74C3C', alpha=0.15, linewidth=1)
+
+            # plot bold mean lines
+            ax.plot(x_axis, mean_train, label=f'Train {metric}', color='#2C3E50', linewidth=2.5)
+            ax.plot(x_axis, mean_val, label=f'Val {metric}', color='#E74C3C', linewidth=2.5)
+
+            # formatting
+            ax.set_title(f'{ex_name}', fontsize=14)
+            ax.set_xlabel('Trees (Boosting Rounds)', fontsize=12)
+            if ax == axes[0]:
+                ax.set_ylabel(f'{metric} Loss', fontsize=12)
+            ax.legend(loc='upper right')
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+        plt.suptitle(f'Learning Curves across Folds: {model_algo} ({target.replace("Asymmetry_JT_Ratio_", "")})',
+                     fontsize=16, y=1.05)
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f'{model_algo.lower()}_learning_curves_{target}.png')
+        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        plt.close()
+        print(f"Learning curves saved to {out_path}")
+

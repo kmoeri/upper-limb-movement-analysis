@@ -6,7 +6,8 @@ import json
 import shap
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold, GroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, GroupKFold, StratifiedKFold
+from sklearn.metrics import r2_score, root_mean_squared_error, mean_absolute_error
 
 # modules
 from src.config import config
@@ -34,7 +35,8 @@ class EnsembleManager:
         self.expected_exercises: list[str] = ['FingerTapping', 'FingerAlternation', 'HandOpening', 'ProSup']
 
     def train_all_exercises(self, df_train: pd.DataFrame, feature_cols: list[str],
-                            target_col: str, pre_tuned_params: dict = None) -> dict:
+                            target_col: str, pre_tuned_params: dict = None,
+                            logger=None, fold_idx: int = None) -> dict:
         """
         Trains models for all exercises. If pre_tuned_params is provided (data from a previous run),
         the tuning is skipped.
@@ -44,6 +46,8 @@ class EnsembleManager:
             feature_cols (list[str]): List of features to train on.
             target_col (str): Target column.
             pre_tuned_params (dict): Dictionary of tuning parameters from a previous run.
+            logger (DataLogger): DataLogger object tracking training information. Default is None.
+            fold_idx (int): index of the current fold. Default is None.
 
         Returns:
             newly_tuned_params (dict): Dictionary of tuned parameters and selected features.
@@ -81,7 +85,8 @@ class EnsembleManager:
             else:
                 # fit and reduce from scratch
                 max_features: int = config['classification']['max_features']
-                wrapper.fit_and_reduce(X, y, groups, max_features=max_features)
+                wrapper.fit_and_reduce(X, y, groups, max_features=max_features,
+                                       logger=logger, fold_idx=fold_idx, ex_name=ex_name)
 
                 # bundle parameters to save to JSON
                 params_to_save = wrapper.best_params.copy()
@@ -177,7 +182,7 @@ class EnsembleManager:
         return final_prediction, participant_shap, participant_features
 
     def train_with_nested_cv(self, df: pd.DataFrame, feature_cols: list[str], target_col: str, baseline_visit: str,
-                             n_splits: int = 5, out_dir: str = None) -> tuple:
+                             n_splits: int = 5, out_dir: str = None, logger=None) -> tuple:
         """
         Executes a nested Cross-Validation (CV) with StratifiedGroupKFold. Dynamically bins the target variable
         (e.g., Jebson Taylor assessment scores) to ensure balanced severity (mild, moderate, severe) across folds.
@@ -190,6 +195,7 @@ class EnsembleManager:
             baseline_visit (str): Visit ID information to only use the baseline data for evaluation (test fold).
             n_splits (int, optional): Number of folds. Defaults to 5.
             out_dir (str, optional): Directory to store the CV results. Defaults to None.
+            logger (DataLogger): DataLogger object tracking training information. Default is None.
 
         Returns:
             tuple: (OOF predictions for all patients, SHAP value DataFrame, SHAP feature DataFrame).
@@ -198,8 +204,42 @@ class EnsembleManager:
         # splitting logic to handle classification and regression differently
 
         if self.task_type == 'regression':
+
+            """
+            ####################### Testing Flattened Data #######################
+            # create a unique ID for every single visit (e.g., "P001_T1")
+            df['unique_visit_id'] = df['p_ID'] + '_' + df['visit_ID']
+
+            # isolate the 62 unique visits for severity binning
+            df_unique_visits = df.drop_duplicates(subset=['unique_visit_id']).copy()
+            df_unique_visits = df_unique_visits.dropna(subset=[target_col])
+
+            # bin the 62 visits
+            df_unique_visits['severity_bin'] = pd.qcut(df_unique_visits[target_col], q=3,
+                                                       labels=['Mild', 'Moderate', 'Severe'])
+
+            # map the bins back to the main long-format dataframe
+            bin_mapping = dict(zip(df_unique_visits['unique_visit_id'], df_unique_visits['severity_bin']))
+            df['severity_bin'] = df['unique_visit_id'].map(bin_mapping)
+            df = df.dropna(subset=['severity_bin']).copy()
+
+            X = df[feature_cols]
+            y = df['severity_bin']
+
+            # group by the unique visit instead of the participant
+            groups = df['unique_visit_id']
+
+            cv_splitter = StratifiedGroupKFold(n_splits=n_splits)
+            split_iterator = cv_splitter.split(X, y=y, groups=groups)
+            ####################### Testing Flattened Data #######################
+            """
+
+            # dynamically determine the chronologically first visit per participant
+            first_visit_series = df.groupby('p_ID')['visit_ID'].transform('min')
+            df_first_visits: pd.DataFrame = df[df['visit_ID'] == first_visit_series].copy()
+
             # baseline visit data
-            df_baseline: pd.DataFrame = df[df['visit_ID'] == baseline_visit].drop_duplicates(subset=['p_ID']).copy()
+            df_baseline: pd.DataFrame = df_first_visits.drop_duplicates(subset=['p_ID']).copy()
 
             # create 3 equally sized percentiles with "qcut"
             df_baseline['severity_bin'] = pd.qcut(df_baseline[target_col], q=3, labels=['Mild', 'Moderate', 'Severe'])
@@ -245,6 +285,9 @@ class EnsembleManager:
         shap_values_lst: list = []
         shap_features_lst: list = []
 
+        # track fold-specific training performance metrics
+        fold_train_metrics_lst: list = []
+
         # nested cross-validation loop
         for fold, (train_idx, val_idx) in enumerate(split_iterator):
             print(f'\nFold {fold + 1}/{n_splits}')
@@ -253,10 +296,19 @@ class EnsembleManager:
             df_train_fold = df.iloc[train_idx].copy()
             df_val_fold = df.iloc[val_idx].copy()
 
+            # log the train and test participant IDs for the current fold
+            if logger:
+                train_pids = df_train_fold['p_ID'].unique().tolist()
+                test_pids = df_val_fold['p_ID'].unique().tolist()
+                logger.log_fold_splits(fold + 1, train_pids, test_pids)
+
             # pass cache and save updates
             fold_key: str = f'fold_{fold}'
             cached_fold_data = all_folds_params.get(fold_key, None)
-            new_params = self.train_all_exercises(df_train_fold, feature_cols, target_col, pre_tuned_params=cached_fold_data)
+
+            # handles both cached training and training from scratch
+            new_params = self.train_all_exercises(df_train_fold, feature_cols, target_col,
+                                                  pre_tuned_params=cached_fold_data, logger=logger, fold_idx=fold+1)
 
             if new_params and json_path:
                 all_folds_params[fold_key] = new_params
@@ -264,11 +316,39 @@ class EnsembleManager:
                     json.dump(all_folds_params, f, indent=4)
 
             # 1) train the ensemble on the augmented training data
-            self.train_all_exercises(df_train_fold, feature_cols, target_col)
+            #self.train_all_exercises(df_train_fold, feature_cols, target_col, logger=logger, fold_idx=fold+1)
+
+            # compute and track training ensemble performance metrics
+            if self.task_type == 'regression':
+                fold_train_preds = []
+                fold_train_reals = []
+                for pid, df_visit in df_train_fold.groupby('p_ID'):
+                    real_score_t = df_visit[target_col].iloc[0]
+                    pred_score_t, _, _ = self.predict_and_explain_visit(df_visit, feature_cols)
+                    if not pd.isna(pred_score_t):
+                        fold_train_preds.append(pred_score_t)
+                        fold_train_reals.append(real_score_t)
+
+                if fold_train_preds:
+                    f_r2 = r2_score(fold_train_reals, fold_train_preds)
+                    f_rmse = root_mean_squared_error(fold_train_reals, fold_train_preds)
+                    f_mae = mean_absolute_error(fold_train_reals, fold_train_preds)
+                    fold_train_metrics_lst.append({'Target': target_col,
+                                                   'Fold': fold + 1,
+                                                   'Train_R2': f_r2,
+                                                   'Train_RMSE': f_rmse,
+                                                   'Train_MAE': f_mae})
 
             # 2) filter the validation fold to only use baseline data
-            df_val_baseline = df_val_fold[df_val_fold['visit_ID'] == baseline_visit].copy()
 
+            val_first_visit_series = df_val_fold.groupby('p_ID')['visit_ID'].transform('min')
+            df_val_baseline = df_val_fold[df_val_fold['visit_ID'] == val_first_visit_series].copy()
+            """
+            ####################### Testing Flattened Data #######################
+            df_val_baseline = df_val_fold.copy()
+            df_val_baseline['severity_bin'] = 'Flattened_Test'
+            ####################### Testing Flattened Data #######################
+            """
             # 3) grouping logic (separate limbs for classification)
             group_keys = ['p_ID', 'side_focus'] if self.task_type == 'classification' else ['p_ID']
 
@@ -295,6 +375,7 @@ class EnsembleManager:
                 if self.task_type == 'regression':
                     oof_results_lst.append({'Target': target_col,
                                             'p_ID': pid,
+                                            'Fold': fold + 1,
                                             'Real_Score': real_score,
                                             'Predicted_Score': round(predicted_score, 3),
                                             'Error': round(abs(float(real_score - predicted_score)), 3),
@@ -311,6 +392,12 @@ class EnsembleManager:
                 # attach tracking metadata to dictionaries
                 p_shap['p_ID'] = pid
                 p_feat['p_ID'] = pid
+
+                # track validation fold number for stability analysis
+                if self.task_type == 'regression':
+                    p_shap['Fold'] = fold + 1
+                    p_feat['Fold'] = fold + 1
+
                 shap_values_lst.append(p_shap)
                 shap_features_lst.append(p_feat)
 
@@ -323,6 +410,18 @@ class EnsembleManager:
         # compile SHAP DataFrames
         df_shap: pd.DataFrame = pd.DataFrame(shap_values_lst).fillna(0.0)
         df_feat: pd.DataFrame = pd.DataFrame(shap_features_lst).fillna(np.nan)
+
+        if self.task_type == 'regression' and out_dir and fold_train_metrics_lst:
+            df_fold_train = pd.DataFrame(fold_train_metrics_lst)
+            df_fold_train.to_csv(os.path.join(out_dir, f'{self.model_type}_fold_train_metrics_{target_col}.csv'), index=False)
+
+        if self.task_type == 'regression' and not oof_results_df.empty:
+            viz: Visualizer = Visualizer()
+            viz.viz_regression_split_distribution(df_train=df,
+                                                  df_test=oof_results_df,
+                                                  target_col=target_col,
+                                                  model_algo=self.model_type,
+                                                  task_type=self.task_type)
 
         print(f'\nSuccessfully evaluated {len(oof_results_lst)} baseline OOF predictions.')
 

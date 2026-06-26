@@ -456,15 +456,15 @@ class KinematicFeatures:
             if not all_candidates:
                 return []
 
-        # handle superpositions - multiple fingers tap within 0.25 seconds of each other
-        min_separation_frames = int(self.fps * 0.25)
+        # handle superpositions - multiple fingers tap within 0.2 seconds of each other
+        min_separation_frames = int(self.fps * 0.2)
         resolve_events = []
         current_group = [all_candidates[0]]
 
         for event in all_candidates[1:]:
             last_event = current_group[-1]
 
-            # current event happense to close to the last event
+            # current event happens to close to the last event
             if event['min_idx'] - last_event['min_idx'] < min_separation_frames:
                 current_group.append(event)
             else:
@@ -478,6 +478,90 @@ class KinematicFeatures:
         if current_group:
             best_event = min(current_group, key=lambda x: x['min_dist'])
             resolve_events.append(best_event)
+
+        return resolve_events
+
+    def extract_alt_tap_event_hysteresis_improved(self, distance_signals: dict, tap_thresh: float = 0.25,
+                                                  min_clearance: float = 0.10, strict_cutoff: float = 0.10) -> list:
+        """
+        Extracts intended finger taps from Euclidean distances of multiple time series data using threshold hysteresis.
+
+        Args:
+            distance_signals (dict): Dictionary mapping finger pairs to 1D numpy distance arrays.
+            tap_thresh (float): Distance threshold value the signal must drop below to activate a tap window.
+            min_clearance (float): Relative distance the signal must rise above to deactivate the tap window (prominence).
+            strict_cutoff (float): Events reaching a distance lower than this threshold are 'strict' taps, all other
+            taps below 0.25 are classified as 'near_miss'.
+
+        Returns:
+            list: Time-sorted list of event dictionaries.
+        """
+
+        resolve_events = []
+        min_separation_frames = int(self.fps * 0.25)
+
+        # find all tap windows for all fingers independently
+        for finger_key, signal in distance_signals.items():
+            finger_candidates = []
+
+            in_window = False
+            current_min_val = float('inf')
+            current_min_idx = -1
+
+            # slicing the time-series
+            for i, val in enumerate(signal):
+
+                # trigger: open the active window
+                if not in_window and val < tap_thresh:
+                    in_window = True
+                    current_min_val = val
+                    current_min_idx = i
+                    continue
+
+                if in_window:
+                    # update the lowest value found in the current slice
+                    if val < current_min_val:
+                        current_min_val = val
+                        current_min_idx = i
+
+                    # trigger: close the window if A) it crossed back above the threshold or B) it rose by the clearance
+                    if val >= tap_thresh or (val - current_min_val >= min_clearance):
+
+                        # window closed
+                        finger_candidates.append({'finger_key': finger_key,
+                                                  'min_idx': current_min_idx,
+                                                  'min_dist': current_min_val,
+                                                  'type': 'strict' if current_min_val <= strict_cutoff else 'near_miss'})
+
+                        in_window = False
+                        current_min_val = float('inf')
+
+            # handle sub-threshold double-taps per finger
+            if not finger_candidates:
+                continue
+
+            finger_candidates.sort(key=lambda x: x['min_dist'])
+            current_group = [finger_candidates[0]]
+
+            for event in finger_candidates[1:]:
+                last_event = current_group[-1]
+
+                # current event happens to close to the last event
+                if event['min_idx'] - last_event['min_idx'] < min_separation_frames:
+                    current_group.append(event)
+                else:
+                    # intended target is always the digit with the lowest distance
+                    best_event = min(current_group, key=lambda x: x['min_dist'])
+                    resolve_events.append(best_event)
+                    # start a new group
+                    current_group = [event]
+
+            # append the best event to the resolved events list
+            if current_group:
+                best_event = min(current_group, key=lambda x: x['min_dist'])
+                resolve_events.append(best_event)
+
+        resolve_events.sort(key=lambda x: x['min_dist'])
 
         return resolve_events
 

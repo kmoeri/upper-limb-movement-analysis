@@ -1001,15 +1001,68 @@ class ToolBox:
 
         return aligned_dict
 
+    #@staticmethod
+    # def evaluate_shap(res_dir: str) -> None:
+    #
+    #     # initialize Visualizer
+    #     viz: Visualizer = Visualizer()
+    #
+    #     # get the model algo name (catboost, xgboost, rf)
+    #     model_algo: str = os.path.basename(res_dir).split('_')[0]
+    #     task_type: str = os.path.basename(res_dir).split('_')[1]
+    #
+    #     # parent directory to check for sister model folders
+    #     parent_dir: str = os.path.dirname(res_dir)
+    #
+    #     # shap value files
+    #     shap_vals_file_lst = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
+    #                           if f.startswith(f'{model_algo}_shap_vals_') and f.endswith('.csv')]
+    #
+    #     if not shap_vals_file_lst:
+    #         return
+    #
+    #     # loop for each exercise
+    #     for shap_vals_file in sorted(shap_vals_file_lst):
+    #
+    #         # for every shap_vals file there is a corresponding shap_feats file
+    #         shap_feats_file = shap_vals_file.replace('vals', 'feats')
+    #
+    #         df_shap: pd.DataFrame = pd.read_csv(shap_vals_file)
+    #         df_feat: pd.DataFrame = pd.read_csv(shap_feats_file)
+    #
+    #         # clean IDs before plotting
+    #         if 'p_ID' in df_shap.columns:
+    #             df_shap = df_shap.drop(columns=['p_ID'])
+    #         if 'p_ID' in df_feat.columns:
+    #             df_feat = df_feat.drop(columns=['p_ID'])
+    #
+    #         # strip 'Fold' labels before computing global mean averages
+    #         if 'Fold' in df_shap.columns:
+    #             df_shap = df_shap.drop(columns=['Fold'])
+    #         if 'Fold' in df_feat.columns:
+    #             df_feat = df_feat.drop(columns=['Fold'])
+    #
+    #         # ensure alignment
+    #         common_cols = df_shap.columns.tolist()
+    #         df_feat = df_feat[common_cols].fillna(df_feat[common_cols].median()).fillna(0)
+    #
+    #         # plot global importance as bar plot
+    #         viz.viz_regression_shap_bar(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+    #
+    #         # plot impact direction as beeswarm plot
+    #         viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+
     @staticmethod
     def evaluate_shap(res_dir: str) -> None:
-
         # initialize Visualizer
         viz: Visualizer = Visualizer()
 
-        # get the model algo name (catboost, xgboost, rf)
+        # get the model algo name (catboost, xgboost, rf) and task type
         model_algo: str = os.path.basename(res_dir).split('_')[0]
         task_type: str = os.path.basename(res_dir).split('_')[1]
+
+        # Identify the parent directory to check for sister model folders
+        parent_dir: str = os.path.dirname(res_dir)
 
         # shap value files
         shap_vals_file_lst = [os.path.join(res_dir, f) for f in os.listdir(res_dir)
@@ -1028,50 +1081,56 @@ class ToolBox:
             df_feat: pd.DataFrame = pd.read_csv(shap_feats_file)
 
             # clean IDs before plotting
-            if 'p_ID' in df_shap.columns:
-                df_shap = df_shap.drop(columns=['p_ID'])
-            if 'p_ID' in df_feat.columns:
-                df_feat = df_feat.drop(columns=['p_ID'])
+            cols_to_drop = ['p_ID', 'Side', 'Fold', 'Target', 'Severity_Class']
+            df_shap = df_shap.drop(columns=[c for c in cols_to_drop if c in df_shap.columns])
+            df_feat = df_feat.drop(columns=[c for c in cols_to_drop if c in df_feat.columns])
 
             # ensure alignment
             common_cols = df_shap.columns.tolist()
             df_feat = df_feat[common_cols].fillna(df_feat[common_cols].median()).fillna(0)
 
-            # plot global importance as bar plot
+            # plot global importance as bar plot (Individual)
             viz.viz_regression_shap_bar(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
 
-            # plot impact direction as beeswarm plot
-            viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+            # plot impact direction as beeswarm plot (Individual)
+            # viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
 
-# def infer_focus_side(df: pd.DataFrame, model_type: str = 'Hand') -> str | None:
-#     """
-#     Infers the focus side ('Left' or 'Right') by checking column names
-#     against known starting landmarks.
-#
-#     Args:
-#         df (pd.DataFrame): DataFrame (either hand_df or pose_df).
-#         model_type (str): 'Hand' or 'Pose' to check the correct set of labels.
-#
-#     Returns:
-#         str | None: 'Left', 'Right', or None if side cannot be determined.
-#     """
-#
-#     # check hand model labels ('wrist1_x' or 'wrist2_x')
-#     if model_type.capitalize() == 'Hand':
-#         if 'wrist1_x' in df.columns:
-#             return 'Left'
-#         elif 'wrist2_x' in df.columns:
-#             return 'Right'
-#
-#     # check pose model labels ('wrist_left_x' or 'wrist_right_x')
-#     elif model_type.capitalize() == 'Pose':
-#         if 'wrist_left_x' in df.columns:
-#             return 'Left'
-#         elif 'wrist_right_x' in df.columns:
-#             return 'Right'
-#
-#     return None
-#
+            # combine shap impact check
+            target_exercise = os.path.basename(shap_vals_file).split('_shap_vals_')[-1].replace('.csv', '')
+
+            models_to_check = ['xgboost', 'catboost', 'rf']
+            model_display_names = {'xgboost': 'XGBoost', 'catboost': 'CatBoost', 'rf': 'Random Forest'}
+
+            all_dirs_exist = True
+            shap_csv_paths = {}
+
+            # check for model folders and corresponding exercise CSVs
+            for m in models_to_check:
+                m_dir = os.path.join(parent_dir, f"{m}_{task_type}")
+                m_csv = os.path.join(m_dir, f"{m}_shap_vals_{target_exercise}.csv")
+
+                if not os.path.exists(m_dir) or not os.path.exists(m_csv):
+                    all_dirs_exist = False
+                    break
+                shap_csv_paths[m] = m_csv
+
+            # If all exist, generate the consensus plot
+            if all_dirs_exist:
+                shap_dict = {}
+
+                # Load and clean the SHAP data for all 3 models
+                for m, csv_path in shap_csv_paths.items():
+                    df_m = pd.read_csv(csv_path)
+                    df_m = df_m.drop(columns=[c for c in cols_to_drop if c in df_m.columns])
+                    shap_dict[model_display_names[m]] = df_m
+
+                # Generate the plot and save it in the parent directory
+                viz.viz_combined_shap_consensus(
+                    shap_dict=shap_dict,
+                    target=target_exercise,
+                    out_dir=parent_dir
+                )
+
 
 def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path: str) -> None:
     """
