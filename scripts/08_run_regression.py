@@ -26,8 +26,12 @@ def calc_asymmetry_ratios(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataF
     # find common indices (exercise exists for both sides)
     common_idx: int = df_affected.index.intersection(df_healthy.index)
 
+    epsilon = 1e-8
     # calculate ratio (prevent division by zero)
-    df_ratio = df_affected.loc[common_idx, feature_cols] / (df_healthy.loc[common_idx, feature_cols] + 1e-8)
+    df_ratio = (df_affected.loc[common_idx, feature_cols] + epsilon) / (df_healthy.loc[common_idx, feature_cols] + epsilon)
+
+    # clip extreme artifacts
+    df_ratio = df_ratio.clip(lower=0.0, upper=20.0)
 
     # reset the index to convert back to standard columns
     df_final = df_ratio.reset_index()
@@ -59,19 +63,19 @@ def calc_regression_metrics(df: pd.DataFrame) -> dict:
         res_r2 = bootstrap((y_true, y_pred), lambda t, p: _metric_statistic(t, p, r2_score),
                            paired=True, method='BCa', n_resamples=1000, random_state=42)
         results[
-            'Pooled_Test_R2 [95% CI]'] = f"{r2:.3f} [{res_r2.confidence_interval.low:.3f} - {res_r2.confidence_interval.high:.3f}]"
+            'Pooled_Test_R2 [95% CI]'] = f"{r2:.3f} [{res_r2.confidence_interval.low:.3f}, {res_r2.confidence_interval.high:.3f}]"
 
         # RMSE
         res_rmse = bootstrap((y_true, y_pred), lambda t, p: _metric_statistic(t, p, root_mean_squared_error),
                              paired=True, method='BCa', n_resamples=1000, random_state=42)
         results[
-            'Pooled_Test_RMSE [95% CI]'] = f"{rmse:.3f} [{res_rmse.confidence_interval.low:.3f} - {res_rmse.confidence_interval.high:.3f}]"
+            'Pooled_Test_RMSE [95% CI]'] = f"{rmse:.3f} [{res_rmse.confidence_interval.low:.3f}, {res_rmse.confidence_interval.high:.3f}]"
 
         # MAE
         res_mae = bootstrap((y_true, y_pred), lambda t, p: _metric_statistic(t, p, mean_absolute_error),
                             paired=True, method='BCa', n_resamples=1000, random_state=42)
         results[
-            'Pooled_Test_MAE [95% CI]'] = f"{mae:.3f} [{res_mae.confidence_interval.low:.3f} - {res_mae.confidence_interval.high:.3f}]"
+            'Pooled_Test_MAE [95% CI]'] = f"{mae:.3f} [{res_mae.confidence_interval.low:.3f}, {res_mae.confidence_interval.high:.3f}]"
 
     except Exception as e:
         # fallback if BCa fails due to extreme variance edge cases
@@ -146,9 +150,9 @@ def evaluate_regression_models(res_dir: str) -> None:
 
     # re-order columns to display train properties before test properties
     ordered_cols = ['Target',
-                    'Train_R2 (Mean±STD)', 'Test_R2 (Mean±STD)', 'Pooled_Test_R2',
-                    'Train_RMSE (Mean±STD)', 'Test_RMSE (Mean±STD)', 'Pooled_Test_RMSE',
-                    'Train_MAE (Mean±STD)', 'Test_MAE (Mean±STD)', 'Pooled_Test_MAE']
+                    'Train_R2 (Mean±STD)', 'Test_R2 (Mean±STD)', 'Pooled_Test_R2 [95% CI]',
+                    'Train_RMSE (Mean±STD)', 'Test_RMSE (Mean±STD)', 'Pooled_Test_RMSE [95% CI]',
+                    'Train_MAE (Mean±STD)', 'Test_MAE (Mean±STD)', 'Pooled_Test_MAE [95% CI]']
 
     # ensure all remaining active columns are mapped correctly
     final_cols = [c for c in ordered_cols if c in metrics_df.columns]
@@ -159,8 +163,8 @@ def evaluate_regression_models(res_dir: str) -> None:
     metrics_df.to_csv(os.path.join(res_dir, f'{model_algo}_metrics.csv'))
 
     # create identity plot (all subtests)
-    if not df_all_subtests.empty:
-        viz.viz_regression_identity_plot(df_all_subtests, model_algo)
+    if not df_all_subtests.empty and 'df_total' in locals():
+        viz.viz_regression_identity_plot(df_subtests=df_all_subtests, df_total=df_total, model_algo=model_algo)
 
     # create bland-altman plot (total score)
     if 'df_total' in locals():
@@ -186,10 +190,10 @@ def evaluate_regression_models(res_dir: str) -> None:
             viz.viz_regression_learning_curves(log_filepath=log_file, out_dir=res_dir)
 
 
-def run_regression_pipeline(model_algo: str):
+def run_regression_pipeline():
 
     # model choice and target score
-    #model_algo: str = config['regression'].get('model_choice', 'catboost')
+    model_algo: str = config['regression'].get('model_choice', 'catboost')
     target_type: str = config['regression'].get('reference_score', 'JT')
     baseline_visit: str = config['classification']['baseline_visit_id']
     print(f'Starting Machine Learning Pipeline: Phase 2 - {target_type}-Score Regression ...')
@@ -260,11 +264,13 @@ def run_regression_pipeline(model_algo: str):
     tb: ToolBox = ToolBox()
     tb.evaluate_shap(out_dir)
 
+    print(f'\nEvaluating feature statistics ...')
+    top_n: int = 10
+    target_name: str = 'Asymmetry_JT_Ratio_Total'
+    tb.calc_feature_statistics(out_dir, model_algo=model_algo, target=target_name, top_n=top_n)
+
     print(f'\nEvaluation was successful. Results saved.')
 
 
 if __name__ == '__main__':
-    model_algo_lst: list[str] = ['xgboost']    # ['catboost', 'xgboost', 'rf']
-    for model_algo in model_algo_lst:
-        print(f'Starting Regression with {model_algo} ...')
-        run_regression_pipeline(model_algo)
+    run_regression_pipeline()

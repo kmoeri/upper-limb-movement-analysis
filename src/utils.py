@@ -10,8 +10,10 @@ import pandas as pd
 from hampel import hampel
 from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
+from scipy.stats import wilcoxon
 from scipy.signal import savgol_filter, butter, filtfilt, ShortTimeFFT
 from scipy.spatial.transform import Rotation
+from statsmodels.stats.multitest import multipletests
 
 # modules
 from src.config import config
@@ -1093,7 +1095,7 @@ class ToolBox:
             viz.viz_regression_shap_bar(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
 
             # plot impact direction as beeswarm plot (Individual)
-            # viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
+            viz.viz_regression_shap_beeswarm(df_shap, df_feat, common_cols, model_algo, shap_vals_file, task_type)
 
             # combine shap impact check
             target_exercise = os.path.basename(shap_vals_file).split('_shap_vals_')[-1].replace('.csv', '')
@@ -1125,11 +1127,87 @@ class ToolBox:
                     shap_dict[model_display_names[m]] = df_m
 
                 # Generate the plot and save it in the parent directory
-                viz.viz_combined_shap_consensus(
+                viz.viz_regression_combined_shap_bar(
                     shap_dict=shap_dict,
                     target=target_exercise,
                     out_dir=parent_dir
                 )
+
+    @staticmethod
+    def calc_feature_statistics(res_dir: str, model_algo: str, target: str, top_n: int = 10) -> None:
+        """
+        Calculates the median (IQR) and FDR-corrected Wilcoxon signed-rank tests against perfect symmetry (1.0) between
+        paretic and non-paretic side for the Top N most important kinematic ratio features.
+        """
+        # load the data
+        shap_vals_file = os.path.join(res_dir, f'{model_algo}_shap_vals_{target}.csv')
+        shap_feats_file = os.path.join(res_dir, f'{model_algo}_shap_feats_{target}.csv')
+
+        if not os.path.exists(shap_vals_file) or not os.path.exists(shap_feats_file):
+            print(f"Required SHAP files for {model_algo} not found. Skipping statistics.")
+            return
+
+        df_shap = pd.read_csv(shap_vals_file)
+        df_feat = pd.read_csv(shap_feats_file)
+
+        # drop non-feature columns
+        cols_to_drop = ['p_ID', 'Side', 'Fold', 'Target', 'Severity_Class']
+        df_shap = df_shap.drop(columns=[c for c in cols_to_drop if c in df_shap.columns])
+        df_feat = df_feat.drop(columns=[c for c in cols_to_drop if c in df_feat.columns])
+
+        # identify the top N features based on absolute SHAP impact
+        mean_abs_shap = df_shap.abs().mean(axis=0)
+        top_features = mean_abs_shap.nlargest(top_n).index.tolist()
+
+        stats_list = []
+        p_values = []
+
+        # calculate median, IQR, and raw Wilcoxon p-value for each top feature
+        for feat in top_features:
+            feature_data = df_feat[feat].dropna().values
+
+            # median and IQR
+            q1 = np.percentile(feature_data, 25)
+            median = np.median(feature_data)
+            q3 = np.percentile(feature_data, 75)
+            iqr_str = f"{median:.2f} ({q1:.2f} - {q3:.2f})"
+
+            # one-sample Wilcoxon signed-rank test against 1.0 (no asymmetry)
+            try:
+                # subtract 1.0 (no asymmetry) -> Wilcoxon tests if the median of differences is zero
+                stat, p_val = wilcoxon(feature_data - 1.0)
+            except ValueError:
+                # handle edge cases with zero variance
+                p_val = 1.0
+
+            p_values.append(p_val)
+
+            stats_list.append({
+                'Feature': feat,
+                'SHAP_Rank': top_features.index(feat) + 1,
+                'Median (IQR)': iqr_str,
+                'Raw_p_value': p_val
+            })
+
+        # apply Benjamini-Hochberg FDR correction
+        reject, p_values_fdr, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+        # add corrected p-values to results
+        for i, row in enumerate(stats_list):
+            row['FDR_Corrected_p_value'] = p_values_fdr[i]
+            # Helper column to instantly flag significance for the manuscript
+            row['Significant (FDR < 0.05)'] = "Yes" if p_values_fdr[i] < 0.05 else "No"
+
+        # export p-values
+        df_results = pd.DataFrame(stats_list)
+        out_path = os.path.join(res_dir, f'{model_algo}_top_{top_n}_feature_statistics_{target}.csv')
+        df_results.to_csv(out_path, index=False)
+
+        print(f"\nFeature statistics calculated and saved to: {out_path}")
+        print(df_results[['Feature', 'Median (IQR)', 'Raw_p_value', 'FDR_Corrected_p_value']].round(4).to_string(index=False))
+
+        viz: Visualizer = Visualizer()
+        viz.viz_regression_feature_distributions(res_dir, model_algo, target, top_n)
 
 
 def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path: str) -> None:
