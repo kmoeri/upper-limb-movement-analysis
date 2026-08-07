@@ -32,11 +32,19 @@ def calc_classification_metrics(df: pd.DataFrame, n_bootstraps: int = 1000) -> d
     # bootstrapping for 95% CI
     bootstrapped_scores = {k: [] for k in metrics.keys()}
 
+    # get unique participant IDs
+    unique_pids = df['p_ID'].unique()
+
     for _ in range(n_bootstraps):
-        # resample with replacement
-        indices = resample(np.arange(len(y_true)), replace=True)
-        y_true_b = y_true[indices]
-        y_prob_b = y_prob[indices]
+        # resample participants with replacement
+        sampled_pids = resample(unique_pids, replace=True)
+
+        # reconstruct the dataframe using sampled participant IDs
+        sampled_pids_df = pd.DataFrame({'p_ID': sampled_pids})
+        boot_df = sampled_pids_df.merge(df, on='p_ID', how='left')
+
+        y_true_b = boot_df['Real_Score'].values
+        y_prob_b = boot_df['Predicted_Score'].values
         y_pred_b = (y_prob_b > 0.5).astype(int)
 
         # skip iteration if only one class is present (prevents AUC crash)
@@ -58,7 +66,6 @@ def calc_classification_metrics(df: pd.DataFrame, n_bootstraps: int = 1000) -> d
             ci_upper = np.percentile(bootstrapped_scores[metric_name], 97.5)
             results[f'{metric_name} [95% CI]'] = f"{point_est:.3f} [{ci_lower:.3f} - {ci_upper:.3f}]"
         else:
-            # fallback if bootstrapping fails completely
             results[f'{metric_name} [95% CI]'] = f"{point_est:.3f} [N/A]"
 
     return results
