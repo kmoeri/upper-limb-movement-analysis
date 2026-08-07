@@ -405,6 +405,13 @@ def run_temporal_consistency_check():
                                             x_label='State (Role)',
                                             y_label='Mean CoV (%)')
 
+    # plot raincloud of active hand
+    vis_util.vis_active_hand_consistency_raincloud(df=hand_df,
+                                                   states_to_plot=hand_states,
+                                                   title='Temporal Consistency of Hands by Task',
+                                                   x_label='State (Role)',
+                                                   y_label='Mean CoV (%)')
+
     # box plot comparison of all 4 states
     vis_util.viz_comparison_boxplot(segment_df=hand_df, body_part='Hand')
 
