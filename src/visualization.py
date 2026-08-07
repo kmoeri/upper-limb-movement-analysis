@@ -17,6 +17,12 @@ from scipy import stats
 from sklearn.utils import resample
 from sklearn.metrics import confusion_matrix, r2_score, roc_curve, auc, mean_absolute_error
 
+# global setup to plot standardized graphs
+import matplotlib as mpl
+mpl.rcParams['pdf.fonttype'] = 42
+mpl.rcParams['ps.fonttype'] = 42
+mpl.rcParams['axes.linewidth'] = 1.0 # Guarantees identical axis thickness
+
 # modules
 from src.config import config, project_path
 
@@ -47,6 +53,72 @@ class Visualizer:
 
         # video frame rate
         self.fps = config['camera_param']['fps']
+
+        # feature name look-up table
+        self.FEATURE_NAME_MAP = {
+            # --- Index Tap ---
+            'idx_tap_amp_pct_90': 'Index Tap Amplitude',
+            'idx_tap_amp_cov': 'Index Tap Amp. CoV',
+            'idx_tap_period_pct_90': 'Index Tap Period',
+            'idx_tap_period_cov': 'Index Tap Period CoV',
+            'idx_tap_vel_neg_pct_90': 'Index Tap Flexion Velocity',
+            'idx_tap_vel_neg_cov': 'Index Tap Flexion Vel. CoV',
+            'idx_tap_vel_ratio_pct_90': 'Index Tap Vel. Ratio',
+            'idx_tap_vel_ratio_cov': 'Index Tap Vel. Ratio CoV',
+            'idx_tap_accuracy': 'Index Tap Spatial Accuracy',
+            'idx_tap_target_error': 'Index Tap Target Error',
+            'idx_tap_isolation': 'Index Tap Isolation',
+            'idx_tap_entropy': 'Index Tap Entropy',
+            'idx_tap_mirror': 'Index Tap Mirroring',
+            'idx_tap_proximal_comp': 'Index Tap Proximal Comp.',
+
+            # --- Alternating Tap ---
+            'alt_tap_total_attempts': 'Alt. Tap Total Attempts',
+            'alt_tap_strict_successes': 'Alt. Tap Strict Successes',
+            'alt_tap_near_misses': 'Alt. Tap Near Misses',
+            'alt_tap_accuracy': 'Alt. Tap Sequence Accuracy',
+            'alt_tap_target_error': 'Alt. Tap Target Error',
+            'alt_tap_rhythm_cov': 'Alt. Tap Rhythm CoV',
+            'alt_tap_synergy': 'Alt. Tap Finger Synergy',
+            'alt_tap_average_volume': 'Alt. Tap 3D Volume',
+            'alt_tap_contrib_ratio': 'Alt. Tap Finger Contrib.',
+            'alt_tap_dwell_time': 'Alt. Tap Dwell Time',
+            'alt_tap_smoothness': 'Alt. Tap Smoothness',
+            'alt_tap_entropy': 'Alt. Tap Entropy',
+            'alt_tap_mirror': 'Alt. Tap Mirroring',
+            'alt_tap_proximal_comp': 'Alt. Tap Proximal Comp.',
+
+            # --- Open/Close ---
+            'open_close_amp_pct_90': 'Hand Open/Close Amplitude',
+            'open_close_amp_cov': 'Hand Open/Close Amp. CoV',
+            'open_close_period_pct_90': 'Hand Open/Close Period',
+            'open_close_period_cov': 'Hand Open/Close Period CoV',
+            'open_close_vel_neg_pct_90': 'Hand Closing Velocity',
+            'open_close_vel_neg_cov': 'Hand Closing Vel. CoV',
+            'open_close_vel_ratio_pct_90': 'Open/Close Velocity Ratio',
+            'open_close_vel_ratio_cov': 'Open/Close Vel. Ratio CoV',
+            'open_close_extension_score': 'Hand Extension Score',
+            'open_close_flexion_score': 'Hand Flexion Score',
+            'open_close_sync_dispersion': 'Open/Close Sync Dispersion',
+            'open_close_entropy': 'Open/Close Entropy',
+            'open_close_mirror': 'Open/Close Mirroring',
+            'open_close_proximal_comp': 'Open/Close Proximal Comp.',
+
+            # --- Pronation/Supination ---
+            'pro_sup_amp_pct_90': 'Pro/Sup Amplitude',
+            'pro_sup_amp_cov': 'Pro/Sup Amp. CoV',
+            'pro_sup_period_pct_90': 'Pro/Sup Period',
+            'pro_sup_period_cov': 'Pro/Sup Period CoV',
+            'pro_sup_vel_neg_pct_90': 'Supination Velocity',
+            'pro_sup_vel_neg_cov': 'Supination Vel. CoV',
+            'pro_sup_vel_ratio_pct_90': 'Pro/Sup Vel. Ratio',
+            'pro_sup_vel_ratio_cov': 'Pro/Sup Vel. Ratio CoV',
+            'pro_sup_active_rom_score': 'Pro/Sup Active ROM',
+            'pro_sup_isolation': 'Pro/Sup Isolation',
+            'pro_sup_entropy': 'Pro/Sup Entropy',
+            'pro_sup_mirror': 'Pro/Sup Mirroring',
+            'pro_sup_proximal_comp': 'Pro/Sup Proximal Comp.'
+        }
 
     # ============================================================================= #
     #                            2) TEMPORAL CONSISTENCY                            #
@@ -150,6 +222,141 @@ class Visualizer:
 
         suffix = '.png'
         f_name: str = title.replace(' ', '_') + suffix
+        f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
+        if not os.path.exists(f_path):
+            plt.savefig(f_path, format=suffix[1:], dpi=600)
+
+        plt.close()
+
+    def vis_active_hand_consistency_raincloud(self, df: pd.DataFrame, states_to_plot: list[str],
+                                              title: str = '', x_label: str = '', y_label: str = '') -> None:
+        """
+        Generates and saves a raincloud plot (combination of a half-violin, boxplot, and stripplot)
+        to visualize the distribution of temporal consistency (CoV) across different body segments.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing the CoV data for all segments.
+            states_to_plot (list[str]): List of states to plot.
+            title (str, optional): Title of the plot and base name for the saved file. Defaults to ''.
+            x_label (str, optional): Label for the x-axis. Defaults to ''.
+            y_label (str, optional): Label for the y-axis. Defaults to ''.
+
+        Returns:
+            None
+        """
+
+        # Clean, rename, and filter the data for 'Active' states
+        plot_df = df.copy()
+
+        # Rename 'Affected' to 'Paretic' and 'Healthy' to 'Non-Paretic'
+        plot_df['State'] = plot_df['State'].str.replace('Affected', 'Paretic', regex=False)
+        plot_df['State'] = plot_df['State'].str.replace('Healthy', 'Non-Paretic', regex=False)
+
+        # Filter the dataframe to only keep 'Active' states
+        plot_df = plot_df[plot_df['State'].str.contains('Active', na=False, case=False)]
+
+        # Update the states_to_plot list to match the new naming and drop 'Passive' targets
+        states_to_plot = [s.replace('Affected', 'Paretic').replace('Healthy', 'Non-Paretic')
+                          for s in states_to_plot if 'Active' in s]
+
+        sns.set_theme(style="whitegrid")
+        link_palette = sns.color_palette("Set2", len(states_to_plot))
+
+        if not states_to_plot:
+            print("Error: states_to_plot list is empty after filtering for 'Active' states.")
+            return
+
+        # map columns to colors
+        column_colors = dict(zip(states_to_plot, link_palette))
+
+        fig, ax = plt.subplots(figsize=(2.5 * len(states_to_plot), 4))
+
+        # loop through each state to plot one by one
+        for i, state_name in enumerate(states_to_plot):
+
+            # Point subset to the filtered 'plot_df' instead of 'df'
+            subset = plot_df[plot_df['State'] == state_name]['CoV'].dropna().values
+
+            if len(subset) == 0:
+                continue
+
+            color = column_colors[state_name]
+
+            # violin plot representing the density
+            violin_plot = sns.violinplot(
+                x=[i] * len(subset), y=subset,
+                inner=None, cut=0, bw_method=0.2, linewidth=0,
+                color=color, ax=ax, alpha=0.6,
+                zorder=1
+            )
+
+            # mask left half of violin plot
+            try:
+                violin = ax.collections[-1]
+                path = violin.get_paths()[0]
+                vertices = path.vertices
+                # find the mean X position of the vertices for the center line
+                mean_x = np.mean(vertices[:, 0])
+                # set all X-vertices to be AT LEAST the mean X, effectively clipping the left side
+                vertices[:, 0] = np.maximum(vertices[:, 0], mean_x)
+
+            except IndexError:
+                pass
+
+            # boxplot
+            sns.boxplot(
+                x=[i] * len(subset),
+                y=subset,
+                whis=1.5,
+                width=0.1,
+                showcaps=True,
+                boxprops={'facecolor': 'white', 'edgecolor': 'black', 'zorder': 3},
+                whiskerprops={'color': 'black', 'zorder': 3},
+                flierprops={'marker': ''},
+                medianprops={'color': 'black', 'zorder': 3},
+                ax=ax
+            )
+
+            # stripplot
+            jitter = np.random.uniform(low=-0.3, high=-0.1, size=len(subset))
+            ax.scatter(
+                np.full_like(subset, i) + jitter,
+                subset,
+                color=color, alpha=0.3, s=30, edgecolor='none',
+                zorder=2
+            )
+
+        ax.set_xticks(range(len(states_to_plot)))
+
+        # === MODIFICATION START: Aesthetics Formatting (Labels, Fonts, Title Removal) ===
+
+        # Format labels: Fix hyphens and explicitly strip out 'Active' or '(Active)'
+        formatted_labels = [name.replace('-', ' ').title()
+                                .replace('Non Paretic', 'Non-Paretic')
+                                .replace('(Active)', '')
+                                .replace('Active', '')
+                                .strip()
+                            for name in states_to_plot]
+
+        # Apply xticklabels with bumped up font size
+        ax.set_xticklabels(formatted_labels, fontsize=14)
+
+        # Remove x-axis label completely and bump up y-axis label font size
+        ax.set_xlabel('')
+        ax.set_ylabel(y_label, fontsize=14)
+
+        # Use 'plot_df' to calculate the y-axis limits
+        max_val = plot_df[plot_df['State'].isin(states_to_plot)]['CoV'].max()
+        y_max = np.ceil(max_val * 1.15) if not np.isnan(max_val) else 10.0
+        ax.set_ylim(0.0, 4)
+
+        # === MODIFICATION START: Removed fig.suptitle() to drop the title from the visual output ===
+        plt.tight_layout()
+        # === MODIFICATION END ===
+
+        suffix = '.png'
+        # The title parameter is still safely used here to name the exported file!
+        f_name: str = title.replace(' ', '_') + 'active' + suffix
         f_path: str = os.path.join(self.temp_consistency_res_path, f_name)
         if not os.path.exists(f_path):
             plt.savefig(f_path, format=suffix[1:], dpi=600)
@@ -1399,17 +1606,20 @@ class Visualizer:
 
         plt.figure(figsize=(12, 10))
 
-        sns.heatmap(matrix_data, mask=mask, cmap='coolwarm', vmin=0, vmax=1, xticklabels=labels, yticklabels=labels,
-                    annot=True, annot_kws={"size": 14}, square=True, linewidths=.5, fmt='.2f')
+        # map updated labels
+        clean_labels = [self.FEATURE_NAME_MAP.get(lbl, lbl) for lbl in labels]
+
+        sns.heatmap(matrix_data, mask=mask, cmap='coolwarm', vmin=0, vmax=1, xticklabels=clean_labels,
+                    yticklabels=clean_labels, annot=True, annot_kws={"size": 14}, square=True, linewidths=.5, fmt='.2f')
 
         plt.title(f'Spearman Correlation Matrix - {ex_name}', fontsize=16)
         plt.tight_layout()
 
-        suffix = '.png'
+        suffix = '.pdf'
         f_name: str = ex_name + '_feature_heatmap' + suffix
         f_path: str = os.path.join(self.classification_res_path, f_name)
         if not os.path.exists(f_path):
-            plt.savefig(f_path, format=suffix[1:], dpi=600)
+            plt.savefig(f_path, format=suffix[1:], transparent=True)
 
         plt.close()
 
@@ -1438,7 +1648,7 @@ class Visualizer:
 
         # save figure
         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_classification')
-        plt.savefig(os.path.join(model_dir, f'{model_algo}_confusion_matrix.png'), dpi=600)
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_confusion_matrix.pdf'), format='pdf', transparent=True)
         plt.close()
 
     @staticmethod
@@ -1518,8 +1728,8 @@ class Visualizer:
         plt.gca().spines['right'].set_visible(False)
         plt.tight_layout()
 
-        out_path = os.path.join(out_dir, f'{model_algo}_roc_curve_{target}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        out_path = os.path.join(out_dir, f'{model_algo}_roc_curve_{target}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
         print(f"ROC Curve saved to {out_path}")
 
@@ -1616,8 +1826,8 @@ class Visualizer:
         plt.gca().spines['right'].set_visible(False)
         plt.tight_layout()
 
-        out_path = os.path.join(out_dir, f'combined_roc_curve_{target}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        out_path = os.path.join(out_dir, f'combined_roc_curve_{target}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
         print(f"Combined ROC Curve saved to {out_path}")
 
@@ -1669,8 +1879,8 @@ class Visualizer:
         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
         os.makedirs(model_dir, exist_ok=True)
 
-        f_basename: str = f'{model_algo}_target_distribution_{target_col}.png'
-        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight')
+        f_basename: str = f'{model_algo}_target_distribution_{target_col}.pdf'
+        plt.savefig(os.path.join(model_dir, f_basename), format='pdf', transparent=True)
         plt.close()
 
     def viz_regression_identity_plot(self, df_subtests: pd.DataFrame, df_total: pd.DataFrame, model_algo: str) -> None:
@@ -1731,68 +1941,143 @@ class Visualizer:
         #plt.title(f'Prediction Accuracy: Total Asymmetry Ratio', fontsize=18, pad=15)
         plt.xlabel('Real Log-Ratio (Stopwatch)', fontsize=16)
         plt.ylabel('Predicted Log-Ratio (Kinematics)', fontsize=16)
-        plt.legend(loc='upper left', fontsize=10, framealpha=0.9, borderpad=1, labelspacing=0.8)
+        plt.xticks(fontsize=16)
+        plt.yticks(fontsize=16)
+        plt.legend(loc='upper left', fontsize=14, framealpha=0.9, borderpad=1, labelspacing=0.8)
         plt.grid(True, linestyle=':', alpha=0.6)
         plt.gca().spines['top'].set_visible(False)
         plt.gca().spines['right'].set_visible(False)
         plt.tight_layout()
 
-        plt.savefig(os.path.join(model_dir, f'{model_algo}_identity_plot_total_only.png'), dpi=600, bbox_inches='tight')
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_identity_plot_total_only.pdf'), format='pdf', transparent=True)
         plt.close()
 
     def viz_regression_bland_altman(self, df: pd.DataFrame, model_algo: str) -> None:
 
+        # calculate the differences (predicted - real)
+        # positive difference -> model overpredicted the severity
         mean_scores = (df['Real_Score'] + df['Predicted_Score']) / 2
         diff_scores = df['Predicted_Score'] - df['Real_Score']
 
-        bias = diff_scores.mean()
-        std_diff = diff_scores.std()
-        upper_loa = bias + 1.96 * std_diff
-        lower_loa = bias - 1.96 * std_diff
+        # check for the Bland-Altman normality assumption (Shapiro-Wilk & Q-Q plot)
+        shapiro_stat, p_value = stats.shapiro(diff_scores)
+        print(f"[{model_algo}] Shapiro-Wilk Statistic: {shapiro_stat:.3f}, p-value: {p_value:.4f}")
 
-        plt.figure(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sm.qqplot(diff_scores, line='s', ax=ax)    # 's': standardized line
+        ax.set_xlabel('Theoretical Quantiles', fontsize=16)
+        ax.set_ylabel('Sample Quantiles', fontsize=16)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        #plt.title(f'Q-Q Plot of Differences ({model_algo})', fontsize=18)
+        ax.text(0.05, 0.95, f'ShapiroW: {shapiro_stat:.3f}\np-value: {p_value:.4f}',
+                transform=ax.transAxes,
+                fontsize=14,
+                horizontalalignment='left',
+                verticalalignment='top',
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.8))
+
+        # save and close Q-Q plot
+        model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
+        os.makedirs(model_dir, exist_ok=True)
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_bland_altman_qq.pdf'), format='pdf', transparent=True)
+        plt.close()
+
+        # Non-Parametric Bland-Altman Limits (SQ Estimator)
+        # Following Gerke (2020), simple sample quantile (SQ) estimator is preferred for small heavy-tailed samples.
+        bias_median = np.median(diff_scores)
+        lower_loa = np.percentile(diff_scores, 2.5)
+        upper_loa = np.percentile(diff_scores, 97.5)
+
+        # bootstrapping confidence intervals for the limits
+        # parametric standard errors do not apply to percentiles -> empirical bootstrapping to find 95% CI
+        n_bootstraps = 1000
+        boot_bias: list = []
+        boot_lower: list = []
+        boot_upper: list = []
+
+        # random seed for reproducibility of CIs
+        np.random.seed(42)
+
+        for _ in range(n_bootstraps):
+
+            # resample the observed differences with replacements (n=25 to n=25)
+            boot_diff = np.random.choice(diff_scores, size=len(diff_scores), replace=True)
+
+            # apply SQ estimator to resampled data
+            boot_bias.append(np.median(boot_diff))
+            boot_lower.append(np.percentile(boot_diff, 2.5))
+            boot_upper.append(np.percentile(boot_diff, 97.5))
+
+        # extract the empirical 2.5th and 97.5th percentiles of teh boostrap distributions
+        ci_bias_lower, ci_bias_upper = np.percentile(boot_bias, [2.5, 97.5])
+        ci_lower_loa_lower, ci_lower_loa_upper = np.percentile(boot_lower, [2.5, 97.5])
+        ci_upper_loa_lower, ci_upper_loa_upper = np.percentile(boot_upper, [2.5, 97.5])
+
+        # plotting
+        fig, ax = plt.subplots(figsize=(10, 8))
         severity_order: list[str] = ['Mild', 'Moderate', 'Severe']
-        sns.scatterplot(x=mean_scores, y=diff_scores, hue=df['Severity_Class'], hue_order=severity_order, s=200, palette='viridis')
+        sns.scatterplot(x=mean_scores, y=diff_scores, hue=df['Severity_Class'],
+                        hue_order=severity_order, s=200, palette='viridis')
 
-        """
-        # Add Participant IDs to the dots
-        for i in range(len(df)):
-            # Extract coordinates and ID
-            x_coord = mean_scores.iloc[i]
-            y_coord = diff_scores.iloc[i]
-            p_id = df['p_ID'].iloc[i]
+        x_min, x_max = ax.get_xlim()
+        x_range = x_max - x_min
+        # add 28% empty space on the right side of the plot
+        new_x_max = x_max + (x_range * 0.28)
+        ax.set_xlim(x_min, new_x_max)
 
-            # Annotate the plot
-            plt.annotate(
-                p_id,
-                (x_coord, y_coord),
-                textcoords="offset points",
-                xytext=(0, 6),  # Shift the text 6 pixels above the dot
-                ha='center',  # Horizontally center the text
-                fontsize=8,  # Keep the font small to prevent overlapping
-                alpha=0.75,  # Slight transparency so dots underneath remain visible
-                color='black'
-            )
-        """
+        # calculate where the data range ends as a fraction (0 to 1) for the shading
+        shade_end = (x_max - x_min) / (new_x_max - x_min)
 
-        # horizontal bias and thresh
-        plt.axhline(bias, color='black', linestyle='-', linewidth=2, label=f'Bias: {bias:.3f}')
-        plt.axhline(upper_loa, color='red', linestyle='--', label=f'+1.96 SD: {upper_loa:.3f}')
-        plt.axhline(lower_loa, color='red', linestyle='--', label=f'-1.96 SD: {lower_loa:.3f}')
+        # plot non-parametric point estimates (median & percentiles
+        ax.axhline(bias_median, color='black', linestyle='-', linewidth=2)
+        ax.axhline(upper_loa, color='black', linestyle='--')
+        ax.axhline(lower_loa, color='black', linestyle='--')
+
+        # plot shaded bootstrapped 95% confidence intervals
+        ax.axhspan(ci_bias_lower, ci_bias_upper, facecolor='grey', alpha=0.2, xmax=shade_end)
+        ax.axhspan(ci_upper_loa_lower, ci_upper_loa_upper, facecolor='grey', alpha=0.2, xmax=shade_end)
+        ax.axhspan(ci_lower_loa_lower, ci_lower_loa_upper, facecolor='grey', alpha=0.2, xmax=shade_end)
+
+        # x-position of text
+        text_x = 0.98
+
+        # calculate a dynamic y-offset for the text
+        y_range = diff_scores.max() - diff_scores.min()
+        y_offset = y_range * 0.015
+
+        # median annotations
+        ax.text(text_x, bias_median + y_offset, 'Median', ha='right', va='bottom',
+                transform=ax.get_yaxis_transform(), fontsize=14)
+        ax.text(text_x, bias_median - y_offset, f'{bias_median:.3f}', ha='right', va='top',
+                transform=ax.get_yaxis_transform(), fontsize=14)
+
+        # upper LoA annotations
+        ax.text(text_x, upper_loa + y_offset, '97.5th Percentile', ha='right', va='bottom',
+                transform=ax.get_yaxis_transform(), fontsize=14)
+        ax.text(text_x, upper_loa - y_offset, f'{upper_loa:.3f}', ha='right', va='top',
+                transform=ax.get_yaxis_transform(), fontsize=14)
+
+        # lower LoA annotations
+        ax.text(text_x, lower_loa + y_offset, '2.5th Percentile', ha='right', va='bottom',
+                transform=ax.get_yaxis_transform(), fontsize=14)
+        ax.text(text_x, lower_loa - y_offset, f'{lower_loa:.3f}', ha='right', va='top',
+                transform=ax.get_yaxis_transform(), fontsize=14)
 
         # figure layout
-        #plt.title(f'JTHFT - Total Asymmetry', fontsize=18)
-        plt.xlabel('Average of Real and Predicted Score', fontsize=16)
-        plt.xticks(fontsize=16)
-        plt.ylabel('Difference (Predicted - Real)', fontsize=16)
-        plt.yticks(fontsize=16)
-        plt.legend(fontsize=16, loc='lower left')
-        plt.grid(True, alpha=0.3)
+        ax.set_xlabel('Average of Real and Predicted Score', fontsize=16)
+        ax.tick_params(axis='x', labelsize=16)
+        ax.set_ylabel('Difference (Predicted - Real)', fontsize=16)
+        ax.tick_params(axis='y', labelsize=16)
+
+        # adjust legend to capture the shaded regions without cluttering the plot
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 1.02), fontsize=14, ncol=3, framealpha=1)
+        ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
         # save figure
-        model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_regression')
-        plt.savefig(os.path.join(model_dir, f'{model_algo}_bland_altman.png'), dpi=600)
+        plt.savefig(os.path.join(model_dir, f'{model_algo}_bland_altman.pdf'), format='pdf', transparent=True)
+
         plt.close()
 
     def viz_regression_shap_bar(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
@@ -1813,24 +2098,25 @@ class Visualizer:
             plot_values.append(mean_abs_shap[col])
             pct_dict[col] = f'{(mean_abs_shap[col] / total_impact) * 100:.1f}%'
 
-        """
-        if rest_cols:
-            rest_impact = mean_abs_shap[rest_cols].sum()
-            rest_label = f'Sum of {len(rest_cols)} other features'
-            plot_cols.append(rest_label)
-            plot_values.append(rest_impact)
-            pct_dict[rest_label] = f'{(rest_impact / total_impact) * 100:.1f}%'
-        """
+        # if rest_cols:
+        #     rest_impact = mean_abs_shap[rest_cols].sum()
+        #     rest_label = f'Sum of {len(rest_cols)} other features'
+        #     plot_cols.append(rest_label)
+        #     plot_values.append(rest_impact)
+        #     pct_dict[rest_label] = f'{(rest_impact / total_impact) * 100:.1f}%'
 
         # Reverse lists because horizontal bar charts plot from bottom to top
         plot_cols.reverse()
         plot_values.reverse()
 
+        # map labels
+        clean_plot_cols = [self.FEATURE_NAME_MAP.get(col, col) for col in plot_cols]
+
         plt.figure(figsize=(5, 8))
         ax = plt.gca()
 
         # Draw native matplotlib bars (Color matched to ROC Curve CI band)
-        bars = ax.barh(plot_cols, plot_values, color='#6C3BAA', alpha=0.9, height=0.6)
+        bars = ax.barh(clean_plot_cols, plot_values, color='#6C3BAA', alpha=0.8, height=0.6)
 
         # --- PERCENTAGE LABELS (COMMENTED OUT FOR MANUSCRIPT) ---
         # x_offset = max(plot_values) * 0.015
@@ -1844,16 +2130,19 @@ class Visualizer:
         max_val = max(plot_values)
         x_offset = max_val * 0.03  # add a gap between the bar end and the text
 
-        for bar, val in zip(bars, plot_values):
+        for bar, val, col in zip(bars, plot_values, plot_cols):
             y_center = bar.get_y() + bar.get_height() / 2
             bar_width = bar.get_width()
 
+            # get formatted percentage string
+            pct_str = pct_dict[col]
+
             # write the value formatted to 3 decimal places
-            ax.text(bar_width + x_offset, y_center, f'{val:.3f}',
+            ax.text(bar_width + x_offset, y_center, f'{val:.3f} ({pct_str})',
                     va='center', ha='left', color='black', fontsize=12)
 
-        # extend the x-axis by 25% so the text doesn't get clipped
-        ax.set_xlim(0, max_val * 1.25)
+        # extend the x-axis by 40% so the text doesn't get clipped
+        ax.set_xlim(0, max_val * 1.4)
 
         target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
 
@@ -1871,7 +2160,12 @@ class Visualizer:
         # Clean borders
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        plt.tight_layout()
+
+        # force identical y-limits for 10 features
+        ax.set_ylim(-0.5, 9.5)
+        #plt.tight_layout()
+        # left is small because the y-labels are hidden; top and bottom must match the boxplot
+        plt.subplots_adjust(left=0.05, right=0.85, top=0.85, bottom=0.15)
 
         # save plot
         if task_type == 'classification':
@@ -1879,12 +2173,13 @@ class Visualizer:
         else:
             model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
 
-        f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
-        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
+        # f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.png'
+        # plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
+        f_basename: str = f'{model_algo}_shap_bar_{target_exercise_name}.pdf'
+        plt.savefig(os.path.join(model_dir, f_basename), format='pdf', transparent=True)
         plt.close()
 
-    @staticmethod
-    def viz_regression_combined_shap_bar(shap_dict: dict, target: str, out_dir: str, top_n: int = 10) -> None:
+    def viz_regression_combined_shap_bar(self, shap_dict: dict, target: str, out_dir: str, top_n: int = 10) -> None:
         """
         Creates a grouped SHAP bar chart comparing feature importance across multiple models.
         Converts absolute SHAP to Relative Percentage Impact to safely compare different architectures.
@@ -1941,7 +2236,9 @@ class Visualizer:
 
         # formatting
         ax.set_yticks(y)
-        ax.set_yticklabels(features, fontsize=16)
+        # map labels
+        clean_features = [self.FEATURE_NAME_MAP.get(feat, feat) for feat in features]
+        ax.set_yticklabels(clean_features, fontsize=16)
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f'{x:.0f}%'))
         ax.tick_params(axis='x', labelsize=16)
 
@@ -1958,21 +2255,114 @@ class Visualizer:
         ax.spines['right'].set_visible(False)
         plt.tight_layout()
 
-        out_path = os.path.join(out_dir, f'combined_shap_consensus_{target}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        out_path = os.path.join(out_dir, f'combined_shap_consensus_{target}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
         print(f"Combined Consensus SHAP Plot saved to {out_path}")
+
+    # def viz_regression_shap_beeswarm(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
+    #                                  model_algo: str, f_path: str, task_type: str) -> None:
+    #
+    #     # new imports needed for coordinate blending and custom ticks
+    #     import matplotlib.transforms as mtransforms
+    #     from matplotlib.ticker import MultipleLocator
+    #
+    #     mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
+    #     top_cols = mean_abs_shap.nlargest(10).index.tolist()
+    #     #rest_cols = [c for c in common_cols if c not in top_cols]
+    #
+    #     df_shap_plot = pd.DataFrame()
+    #     df_feat_plot = pd.DataFrame()
+    #     plot_cols = []
+    #
+    #     # add top features first
+    #     for col in top_cols:
+    #         df_shap_plot[col] = df_shap[col]
+    #         df_feat_plot[col] = df_feat[col]
+    #         plot_cols.append(col)
+    #
+    #     # add the remaining features aggregate at the end
+    #     # if rest_cols:
+    #     #     rest_label = f'Sum of {len(rest_cols)} other features'
+    #     #     df_shap_plot[rest_label] = df_shap[rest_cols].sum(axis=1)
+    #     #     df_feat_plot[rest_label] = 0.0
+    #     #     plot_cols.append(rest_label)
+    #
+    #     # map labels
+    #     clean_plot_cols = [self.FEATURE_NAME_MAP.get(col, col) for col in plot_cols]
+    #
+    #     plt.figure(figsize=(5, 8))
+    #
+    #     shap.summary_plot(df_shap_plot[plot_cols].values,
+    #                       features=df_feat_plot[plot_cols],
+    #                       feature_names=clean_plot_cols,
+    #                       max_display=len(plot_cols),
+    #                       sort=False,
+    #                       color_bar=False,
+    #                       show=False,
+    #                       plot_size=None)
+    #
+    #     ax = plt.gca()
+    #
+    #     # hide y-labels
+    #     ax.tick_params(axis='y', labelleft=False, left=False)
+    #
+    #     # set x-axis ticks to steps of 0.1
+    #     ax.xaxis.set_major_locator(MultipleLocator(0.1))
+    #
+    #     # Safely ensure the plot spans at least -0.1 to 0.1 so the colorbar isn't cut off
+    #     x_min, x_max = ax.get_xlim()
+    #     ax.set_xlim(min(x_min, -0.1), max(x_max, 0.1))
+    #
+    #     # # blended coordinate colorbar
+    #     # cmap = shap.plots.colors.red_blue
+    #     # sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+    #     # sm.set_array([])
+    #     #
+    #     # # Create the blended transform: X is tied to Data, Y is tied to the Axes Box
+    #     # #trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+    #     # # Bounds: [x_start, y_start, width, height]
+    #     # # Start at exactly x = -0.1, make width 0.2 (so it ends at exactly x = 0.1)
+    #     # #cb_ax = ax.inset_axes([-0.1, 1.04, 0.2, 0.04], transform=trans)
+    #     # cb_ax = ax.inset_axes([0.0, 1.04, 1.0, 0.04], transform=ax.transAxes)
+    #     #
+    #     # cb = plt.colorbar(sm, cax=cb_ax, orientation='horizontal')
+    #     # cb.set_ticks([0, 1])
+    #     # cb.set_ticklabels(['Low', 'High'])
+    #     # cb.set_label('Feature Value', fontsize=12)
+    #     #
+    #     # cb.ax.xaxis.set_label_position('top')
+    #     # cb.ax.xaxis.set_ticks_position('top')
+    #     # ---------------------------------------------------------
+    #
+    #     #plt.title(f'SHAP Feature Impact: {target_name} ({model_algo.upper()})', fontsize=18)
+    #     plt.xlabel('SHAP value (Impact on prediction)', fontsize=14)
+    #     #plt.tight_layout()
+    #
+    #     # force identical y-limits for 10 features
+    #     ax.set_ylim(-0.5, 9.5)
+    #     # left is small because the y-labels are hidden; top and bottom must match the boxplot
+    #     plt.subplots_adjust(left=0.05, right=0.95, top=0.85, bottom=0.15)
+    #
+    #     if task_type == 'classification':
+    #         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+    #     else:
+    #         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+    #
+    #     # f_basename: str = f'{model_algo}_shap_beeswarm_{target_name}.png'
+    #     # plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
+    #     target_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+    #     f_basename: str = f'{model_algo}_shap_beeswarm_{target_name}.pdf'
+    #     plt.savefig(os.path.join(model_dir, f_basename), format='pdf', transparent=True)
+    #     plt.close()
 
     def viz_regression_shap_beeswarm(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
                                      model_algo: str, f_path: str, task_type: str) -> None:
 
-        # new imports needed for coordinate blending and custom ticks
-        import matplotlib.transforms as mtransforms
         from matplotlib.ticker import MultipleLocator
 
         mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
         top_cols = mean_abs_shap.nlargest(10).index.tolist()
-        #rest_cols = [c for c in common_cols if c not in top_cols]
 
         df_shap_plot = pd.DataFrame()
         df_feat_plot = pd.DataFrame()
@@ -1983,24 +2373,20 @@ class Visualizer:
             df_shap_plot[col] = df_shap[col]
             df_feat_plot[col] = df_feat[col]
             plot_cols.append(col)
-        """
-        # add the remaining features aggregate at the end
-        if rest_cols:
-            rest_label = f'Sum of {len(rest_cols)} other features'
-            df_shap_plot[rest_label] = df_shap[rest_cols].sum(axis=1)
-            df_feat_plot[rest_label] = 0.0
-            plot_cols.append(rest_label)
-        """
+
+        # map labels
+        clean_plot_cols = [self.FEATURE_NAME_MAP.get(col, col) for col in plot_cols]
+
         plt.figure(figsize=(5, 8))
 
         shap.summary_plot(df_shap_plot[plot_cols].values,
                           features=df_feat_plot[plot_cols],
-                          feature_names=plot_cols,
+                          feature_names=clean_plot_cols,
                           max_display=len(plot_cols),
                           sort=False,
                           color_bar=False,
                           show=False,
-                          plot_size=(5, 7))
+                          plot_size=None)
 
         ax = plt.gca()
 
@@ -2014,17 +2400,38 @@ class Visualizer:
         x_min, x_max = ax.get_xlim()
         ax.set_xlim(min(x_min, -0.1), max(x_max, 0.1))
 
-        # blended coordinate colorbar
+        plt.xlabel('SHAP value (Impact on prediction)', fontsize=14)
+
+        # force identical y-limits for 10 features
+        ax.set_ylim(-0.5, 9.5)
+
+        # left is small because the y-labels are hidden; top and bottom must match the boxplot
+        plt.subplots_adjust(left=0.05, right=0.95, top=0.85, bottom=0.15)
+
+        # Determine output directory
+        if task_type == 'classification':
+            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
+        else:
+            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
+
+        target_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+
+        # ==========================================
+        # SAVE VERSION 1: BARE PLOT (NO COLORBAR)
+        # ==========================================
+        f_basename: str = f'{model_algo}_shap_beeswarm_{target_name}.pdf'
+        plt.savefig(os.path.join(model_dir, f_basename), format='pdf', transparent=True)
+
+        # ==========================================
+        # ADD COLORBAR DYNAMICALLY
+        # ==========================================
         cmap = shap.plots.colors.red_blue
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
         sm.set_array([])
 
-        # Create the blended transform: X is tied to Data, Y is tied to the Axes Box
-        trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
-
-        # Bounds: [x_start, y_start, width, height]
-        # Start at exactly x = -0.1, make width 0.2 (so it ends at exactly x = 0.1)
-        cb_ax = ax.inset_axes([-0.1, 1.04, 0.2, 0.04], transform=trans)
+        # Create the inset axes bound to the exact physical width of the plot
+        # [x_start, y_start, width, height] -> 100% width of the axes, floating just above
+        cb_ax = ax.inset_axes([0.0, 1.04, 1.0, 0.04], transform=ax.transAxes)
 
         cb = plt.colorbar(sm, cax=cb_ax, orientation='horizontal')
         cb.set_ticks([0, 1])
@@ -2033,67 +2440,14 @@ class Visualizer:
 
         cb.ax.xaxis.set_label_position('top')
         cb.ax.xaxis.set_ticks_position('top')
-        # ---------------------------------------------------------
 
-        target_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
+        # ==========================================
+        # SAVE VERSION 2: WITH COLORBAR
+        # ==========================================
+        f_basename_cb: str = f'{model_algo}_shap_beeswarm_{target_name}_colorbar.pdf'
+        plt.savefig(os.path.join(model_dir, f_basename_cb), format='pdf', transparent=True)
 
-        #plt.title(f'SHAP Feature Impact: {target_name} ({model_algo.upper()})', fontsize=18)
-        plt.xlabel('SHAP value (Impact on prediction)', fontsize=14)
-        plt.tight_layout()
-
-        if task_type == 'classification':
-            model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
-        else:
-            model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
-
-        f_basename: str = f'{model_algo}_shap_beeswarm_{target_name}.png'
-        plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
-
-    # def viz_regression_shap_beeswarm_old(self, df_shap: pd.DataFrame, df_feat: pd.DataFrame, common_cols: list[str],
-    #                                      model_algo: str, f_path: str, task_type: str) -> None:
-    #
-    #     # aggregate the 'rest of the features'
-    #     mean_abs_shap = df_shap[common_cols].abs().mean(axis=0)
-    #     top_6_cols = mean_abs_shap.nlargest(10).index.tolist()
-    #     rest_cols = [c for c in common_cols if c not in top_6_cols]
-    #
-    #     if rest_cols:
-    #         # create subset with top 6
-    #         df_shap_plot = df_shap[top_6_cols].copy()
-    #         df_feat_plot = df_feat[top_6_cols].copy()
-    #
-    #         # sum the remaining SHAP values per row
-    #         rest_label = f'Sum of {len(rest_cols)} other features'
-    #         df_shap_plot[rest_label] = df_shap[rest_cols].sum(axis=1)
-    #         df_feat_plot[rest_label] = 0.0
-    #
-    #         plot_cols = top_6_cols + [rest_label]
-    #         display_count = 11
-    #     else:
-    #         df_shap_plot = df_shap[common_cols]
-    #         df_feat_plot = df_feat[common_cols]
-    #         plot_cols = common_cols
-    #         display_count = 10
-    #
-    #     plt.figure(figsize=(10, 6))
-    #     shap.summary_plot(df_shap_plot.values, features=df_feat_plot, feature_names=plot_cols,
-    #                       max_display=display_count, sort=False, show=False)
-    #
-    #     target_exercise_name: str = os.path.basename(f_path).split('_shap_vals_')[-1].replace('.csv', '')
-    #     plt.title(f'SHAP Feature Impact: {target_exercise_name} ({model_algo.upper()})', fontsize=18, pad=20)
-    #     plt.tight_layout()
-    #
-    #     # save plot
-    #     if task_type == 'classification':
-    #         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
-    #     else:
-    #         # regression
-    #         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
-    #
-    #     f_basename: str = f'{model_algo}_shap_beeswarm_{target_exercise_name}.png'
-    #     plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
-    #     plt.close()
 
     def viz_regression_feature_stability_boxplot(self, model_algo: str, f_path: str, task_type: str) -> None:
 
@@ -2112,6 +2466,9 @@ class Visualizer:
 
         # transform from wide to long format: [Fold, Feature, SHAP_Value]
         df_melted = df_shap.melt(id_vars=['Fold'], var_name='Feature', value_name='SHAP_Value')
+
+        # map labels
+        df_melted['Feature'] = df_melted['Feature'].map(lambda x: self.FEATURE_NAME_MAP.get(x, x))
 
         # calculate the absolute SHAP value (impact magnitude)
         df_melted['Abs_SHAP'] = df_melted['SHAP_Value'].abs()
@@ -2158,71 +2515,6 @@ class Visualizer:
         f_basename: str = f'{model_algo}_shap_stability_{target_name}.png'
         plt.savefig(os.path.join(model_dir, f_basename), dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
-
-    # def viz_regression_generalization_gap(self, res_dir: str, model_algo: str, task_type: str) -> None:
-    #
-    #     # read the compiled metrics table
-    #     metrics_file = os.path.join(res_dir, f'{model_algo}_metrics.csv')
-    #     if not os.path.exists(metrics_file):
-    #         print(f"Metrics file missing for {model_algo}. Cannot plot generalization gap.")
-    #         return
-    #
-    #     df_metrics = pd.read_csv(metrics_file)
-    #
-    #     # ensure training metrics were tracked
-    #     if 'Train_R2 (Mean±STD)' not in df_metrics.columns:
-    #         print("Training metrics missing. Cannot plot generalization gap.")
-    #         return
-    #
-    #     # clean subtest names for a cleaner y-axis
-    #     df_metrics['Subtest'] = df_metrics['Target'].str.replace('Asymmetry_JT_Ratio_', '')
-    #
-    #     # filter out N/A rows and extract the numeric train R2 mean from the string "0.750 ± 0.020"
-    #     df_metrics = df_metrics[df_metrics['Train_R2 (Mean±STD)'] != 'N/A'].copy()
-    #     if df_metrics.empty:
-    #         return
-    #
-    #     df_metrics['Train_R2'] = df_metrics['Train_R2 (Mean±STD)'].apply(lambda x: float(str(x).split(' ')[0]))
-    #     df_metrics['Val_R2'] = df_metrics['R2']
-    #
-    #     # sort by validation R2 to make the chart flow
-    #     df_metrics = df_metrics.sort_values(by='Val_R2', ascending=True)
-    #
-    #     # plotting
-    #     plt.figure(figsize=(10, 7))
-    #
-    #     # draw the connecting lines representing the "gap"
-    #     for i, row in df_metrics.iterrows():
-    #         plt.plot([row['Train_R2'], row['Val_R2']], [row['Subtest'], row['Subtest']],
-    #                  color='grey', zorder=1, linestyle='-', alpha=0.5, linewidth=2)
-    #
-    #     # plot the train and validation dots
-    #     plt.scatter(df_metrics['Train_R2'], df_metrics['Subtest'], color='#2C3E50',
-    #                 label='Train R² (Mean)', zorder=2, s=120, edgecolors='black')
-    #     plt.scatter(df_metrics['Val_R2'], df_metrics['Subtest'], color='#E74C3C',
-    #                 label='Validation R² (Pooled OOF)', zorder=3, s=120, edgecolors='black')
-    #
-    #     plt.title(f'Generalization Gap: Train vs. Validation R² ({model_algo.upper()})', fontsize=18, pad=15)
-    #     plt.xlabel('R² Score (Higher is better)', fontsize=14)
-    #     plt.ylabel('', fontsize=14)
-    #     plt.legend(loc='lower right', framealpha=1.0, fontsize=12)
-    #     plt.grid(True, axis='x', linestyle=':', alpha=0.6)
-    #
-    #     # remove top and right borders
-    #     plt.gca().spines['top'].set_visible(False)
-    #     plt.gca().spines['right'].set_visible(False)
-    #
-    #     plt.tight_layout()
-    #
-    #     # save data
-    #     if task_type == 'classification':
-    #         model_dir: str = os.path.join(self.classification_res_path, f'{model_algo}_{task_type}')
-    #     else:
-    #         model_dir: str = os.path.join(self.regression_res_path, f'{model_algo}_{task_type}')
-    #
-    #     out_path = os.path.join(model_dir, f'{model_algo}_generalization_gap.png')
-    #     plt.savefig(out_path, dpi=600, bbox_inches='tight', pad_inches=0.2)
-    #     plt.close()
 
     # ============================================================================= #
     #                           7) Utility                                          #
@@ -2318,7 +2610,7 @@ class Visualizer:
         out_dir = os.path.join(self.regression_res_path if task_type == 'regression' else self.classification_res_path,
                                f'{model_algo}_{task_type}')
         os.makedirs(out_dir, exist_ok=True)
-        plt.savefig(os.path.join(out_dir, f'{model_algo}_generalization_gap_folds.png'), dpi=600, bbox_inches='tight')
+        plt.savefig(os.path.join(out_dir, f'{model_algo}_generalization_gap_folds.pdf'), format='pdf', transparent=True)
         plt.close()
 
     def viz_regression_split_distribution(self, df_train: pd.DataFrame, df_test: pd.DataFrame, target_col: str,
@@ -2356,7 +2648,8 @@ class Visualizer:
 
         f_basename = f'{model_algo}_distribution_check_{target_col}.png'
         out_path = os.path.join(model_dir, f_basename)
-        plt.savefig(out_path, dpi=600, bbox_inches='tight', pad_inches=0.2)
+        plt.savefig(out_path, format='pdf', transparent=True, pad_inches=0.2)
+        #plt.savefig(out_path, dpi=600, bbox_inches='tight', pad_inches=0.2)
         plt.close()
 
     @staticmethod
@@ -2401,8 +2694,8 @@ class Visualizer:
         sns.despine()
         plt.tight_layout()
 
-        out_path = os.path.join(out_dir, f'{model_algo}_fold_distributions_{target_col}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        out_path = os.path.join(out_dir, f'{model_algo}_fold_distributions_{target_col}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
 
     @staticmethod
@@ -2479,31 +2772,27 @@ class Visualizer:
             ax.plot(x_axis, mean_val, label=f'Val {metric}', color='#E74C3C', linewidth=2.5)
 
             # formatting
-            ax.set_title(f'{ex_name}', fontsize=14)
+            #ax.set_title(f'{ex_name}', fontsize=14)
 
             # Only set X labels for the bottom row (indices 2 and 3)
             if i >= 2:
-                ax.set_xlabel('Number of Trees', fontsize=12)
+                ax.set_xlabel('Number of Trees', fontsize=14)
 
             # Only set Y labels for the left column (indices 0 and 2)
             if i % 2 == 0:
-                ax.set_ylabel(f'Loss ({metric})', fontsize=12)
+                ax.set_ylabel(f'Loss ({metric})', fontsize=14)
 
             ax.legend(loc='upper right')
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
 
-        plt.suptitle(f'Optimization Learning Curves: JTHFT Asymmetry Ratio', fontsize=16, y=1.02)
-        plt.tight_layout()
-
-        out_path = os.path.join(out_dir, f'{model_algo.lower()}_learning_curves_{target}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        #plt.suptitle(f'Optimization Learning Curves: JTHFT Asymmetry Ratio', fontsize=16, y=1.02)
+        out_path = os.path.join(out_dir, f'{model_algo.lower()}_learning_curves_{target}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
-        print(f"Learning curves saved to {out_path}")
 
-    @staticmethod
-    def viz_regression_feature_distributions(res_dir: str, model_algo: str, target: str, top_n: int = 10) -> None:
+    def viz_regression_feature_distributions(self, res_dir: str, model_algo: str, target: str, top_n: int = 10) -> None:
         """
         Plots horizontal boxplots of the raw log-ratios for the Top N features.
         Draws a baseline at 1.0 (Perfect Symmetry) and annotates FDR p-values from the stats table.
@@ -2543,7 +2832,7 @@ class Visualizer:
                     color='#6C3BAA', width=0.4, boxprops={'alpha': 0.6},
                     flierprops={'marker': 'o', 'markersize': 5, 'alpha': 1.0})
 
-        ax.set_xlim(left=-0.2, right=5.0)
+        ax.set_xlim(left=-0.5, right=9.5)
 
         # draw the baseline of perfect symmetry (1.0)
         plt.axvline(x=1.0, color='#FF0055', linestyle='--', linewidth=2.5, zorder=0,
@@ -2559,8 +2848,11 @@ class Visualizer:
             p_str = "< 0.001" if p_val < 0.001 else f"= {p_val:.3f}"
             sig_marker = "*" if p_val < 0.05 else ""
 
+            # map labels
+            clean_feat = self.FEATURE_NAME_MAP.get(feat, feat)
+
             # combine feature name and p-value on two lines for a clean look
-            new_label = f"{feat}\n(FDR p {p_str}){sig_marker}"
+            new_label = f"{clean_feat}\n(FDR p {p_str}){sig_marker}"
             new_yticklabels.append(new_label)
 
         # apply the new labels
@@ -2578,11 +2870,15 @@ class Visualizer:
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
-        plt.tight_layout()
+        #plt.tight_layout()
+        # lock the plotting area coordinates
+        plt.subplots_adjust(left=0.45, right=0.95, top=0.85, bottom=0.15)
 
         # save
-        out_path = os.path.join(res_dir, f'{model_algo}_top_{top_n}_feature_distributions_{target}.png')
-        plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        # out_path = os.path.join(res_dir, f'{model_algo}_top_{top_n}_feature_distributions_{target}.png')
+        # plt.savefig(out_path, dpi=600, bbox_inches='tight')
+        out_path = os.path.join(res_dir, f'{model_algo}_top_{top_n}_feature_distributions_{target}.pdf')
+        plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
 
         print(f"Feature distribution boxplots saved to: {out_path}")
