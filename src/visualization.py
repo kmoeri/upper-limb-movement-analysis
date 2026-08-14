@@ -1627,11 +1627,11 @@ class Visualizer:
 
         plt.figure(figsize=(6, 5))
         cm = confusion_matrix(df['Real_Score'], (df['Predicted_Score'] > 0.5).astype('int'))
-        hm = sns.heatmap(cm, annot=True, annot_kws={"size": 20}, fmt='d', cmap='Blues', cbar=False,
+        hm = sns.heatmap(cm, annot=True, annot_kws={"size": 24}, fmt='d', cmap='Blues', cbar=False,
                          xticklabels=['Non-Paretic (0)', 'Paretic (1)'],
                          yticklabels=['Non-Paretic (0)', 'Paretic (1)'],)
-        hm.set_xticklabels(hm.get_xticklabels(), fontsize=16)
-        hm.set_yticklabels(hm.get_yticklabels(), fontsize=16)
+        hm.set_xticklabels(hm.get_xticklabels(), fontsize=20)
+        hm.set_yticklabels(hm.get_yticklabels(), fontsize=20)
 
         # figure labels
         title: str = ''
@@ -1641,9 +1641,9 @@ class Visualizer:
             title = 'XGBoost'
         elif model_algo.upper() == 'CATBOOST':
             title = 'CatBoost'
-        plt.title(f'{title}', fontsize=18)
-        plt.xlabel('Predicted Label', fontsize=18)
-        plt.ylabel('True Label', fontsize=18)
+        plt.title(f'{title}', fontsize=22)
+        plt.xlabel('Predicted Label', fontsize=22)
+        plt.ylabel('True Label', fontsize=22)
         plt.tight_layout()
 
         # save figure
@@ -1964,14 +1964,14 @@ class Visualizer:
         print(f"[{model_algo}] Shapiro-Wilk Statistic: {shapiro_stat:.3f}, p-value: {p_value:.4f}")
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        sm.qqplot(diff_scores, line='s', ax=ax)    # 's': standardized line
-        ax.set_xlabel('Theoretical Quantiles', fontsize=16)
-        ax.set_ylabel('Sample Quantiles', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
+        sm.qqplot(diff_scores, line='s', markersize=12, ax=ax)    # 's': standardized line
+        ax.set_xlabel('Theoretical Quantiles', fontsize=20)
+        ax.set_ylabel('Sample Quantiles', fontsize=20)
+        ax.tick_params(axis='both', which='major', labelsize=18)
         #plt.title(f'Q-Q Plot of Differences ({model_algo})', fontsize=18)
         ax.text(0.05, 0.95, f'ShapiroW: {shapiro_stat:.3f}\np-value: {p_value:.4f}',
                 transform=ax.transAxes,
-                fontsize=14,
+                fontsize=18,
                 horizontalalignment='left',
                 verticalalignment='top',
                 bbox=dict(facecolor='white', edgecolor='none', alpha=0.8))
@@ -2714,12 +2714,22 @@ class Visualizer:
         target = data.get('Metadata', {}).get('Target', 'Unknown')
         folds_data = data.get('Outer_Folds', {})
 
-        # extract unique exercises dynamically
-        exercises = set()
-        for fold_val in folds_data.values():
-            exercises.update(fold_val.get('Exercises', {}).keys())
+        # define lookup dictionary for ordering and naming
+        exercise_lut: dict = {
+            'FingerTapping': 'Index Tap',
+            'FingerAlternation': 'Alt. Tap',
+            'HandOpening': 'Open/Close',
+            'ProSup': 'Pro/Sup'
+        }
 
-        exercises = sorted(list(exercises))
+        # extract unique exercises dynamically to check availability
+        extracted_exercises = set()
+        for fold_val in folds_data.values():
+            extracted_exercises.update(fold_val.get('Exercises', {}).keys())
+
+        # build the final exercise list strictly following the order of the LUT
+        exercises = [ex for ex in exercise_lut.keys() if ex in extracted_exercises]
+
         if not exercises:
             print('No learning curve data found in log.')
             return
@@ -2729,7 +2739,7 @@ class Visualizer:
         axes_flat = axes.flatten()
 
         for i, ax in enumerate(axes_flat):
-            # Hide any extra subplots if there are fewer than 4 exercises
+            # hide extra subplots if there are fewer than 4 exercises
             if i >= len(exercises):
                 ax.set_visible(False)
                 continue
@@ -2748,7 +2758,8 @@ class Visualizer:
                     metric = lc.get('Metric', 'Loss')
 
             if not all_train:
-                ax.set_title(f'{ex_name} (No Data)')
+                # Use mapped name if data is missing
+                ax.set_title(f'{exercise_lut[ex_name]} (No Data)', fontsize=14)
                 continue
 
             # handle varying tree counts (Optuna picks different n_estimators per fold)
@@ -2771,8 +2782,8 @@ class Visualizer:
             ax.plot(x_axis, mean_train, label=f'Train {metric}', color='#2C3E50', linewidth=2.5)
             ax.plot(x_axis, mean_val, label=f'Val {metric}', color='#E74C3C', linewidth=2.5)
 
-            # formatting
-            #ax.set_title(f'{ex_name}', fontsize=14)
+            # formatting: Use mapped name from LUT for the title
+            ax.set_title(f'{exercise_lut[ex_name]}', fontsize=14)
 
             # Only set X labels for the bottom row (indices 2 and 3)
             if i >= 2:
@@ -2787,7 +2798,7 @@ class Visualizer:
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
 
-        #plt.suptitle(f'Optimization Learning Curves: JTHFT Asymmetry Ratio', fontsize=16, y=1.02)
+        plt.tight_layout()
         out_path = os.path.join(out_dir, f'{model_algo.lower()}_learning_curves_{target}.pdf')
         plt.savefig(out_path, format='pdf', transparent=True)
         plt.close()
@@ -2832,11 +2843,11 @@ class Visualizer:
                     color='#6C3BAA', width=0.4, boxprops={'alpha': 0.6},
                     flierprops={'marker': 'o', 'markersize': 5, 'alpha': 1.0})
 
-        ax.set_xlim(left=-0.5, right=9.5)
+        ax.set_xlim(left=-0.5, right=5.5)
 
         # draw the baseline of perfect symmetry (1.0)
         plt.axvline(x=1.0, color='#FF0055', linestyle='--', linewidth=2.5, zorder=0,
-                    label='Perfect Symmetry (Ratio = 1.0)')
+                    label='Perfect Symmetry\n(Ratio = 1.0)')
 
         # format y-axis labels with FDR p-values
         new_yticklabels = []
@@ -2860,7 +2871,7 @@ class Visualizer:
         ax.set_yticklabels(new_yticklabels, fontsize=12)
 
         # figure layout & formatting
-        plt.xlabel('Kinematic Asymmetry Ratio', fontsize=16)
+        plt.xlabel('Kinematic Asymmetry Ratio', fontsize=14)
         #plt.title(f'Clinical Distribution of Top {top_n} Predictive Features', fontsize=18, pad=15)
         ax.set_ylabel('')
         # legend for the baseline
