@@ -3,6 +3,7 @@
 # libraries
 # standard
 import os
+import csv
 import numpy as np
 import pandas as pd
 
@@ -834,14 +835,15 @@ class ToolBox:
         }
 
     @staticmethod
-    def calculate_3d_hand_rotation(df: pd.DataFrame, side_idx: int) -> tuple:
+    def calculate_3d_hand_rotation(df: pd.DataFrame, side_idx: int, sample_id: str = None,
+                                   hand_role: str = None, log_path: str = None) -> tuple:
         """
         Calculates Euler angles by accumulating relative angles between frames. Ensures shortest-path
         rotation to prevent signal rectification.
 
         Args:
-            landmarks_dict (dict): Dictionary of landmarks (3D coordinates).
-            landmark_name_lst (list): List of landmark names (e.g., "wrist1", "mcp12", "mcp15").
+            df (dict): Dictionary of landmarks (3D coordinates).
+            side_idx (int): Index that distinguishes left from right (e.g., left: "wrist1"; right: "wrist2").
 
         Returns:
             euler_angles (tuple): Angle around x-axis, y-axis, and z-axis.
@@ -856,6 +858,11 @@ class ToolBox:
         for lm in [wrist_name, index_name, pinky_name]:
             if f'{lm}_x' not in df.columns:
                 print(f'Error: Landmark "{lm}" not found. Cannot evaluate Pronation/Supination. Skipping.')
+                if sample_id and log_path:
+                    log_rotation_quality({'sample_id': sample_id, 'hand_role': hand_role, 'side_idx': side_idx,
+                                          'status': 'missing_landmark_column', 'total_frames': len(df),
+                                          'n_invalid_geom': '', 'n_velocity_flagged': '',
+                                          'velocity_triggered': '', 'max_gap_frames': ''}, log_path)
                 return {}
 
         # landmark coordinates
@@ -900,6 +907,11 @@ class ToolBox:
         # calculate the absolute rotation relative to the first valid frame
         valid_idc: np.ndarray = np.where(~invalid_mask)[0]
         if len(valid_idc) == 0:
+            if sample_id and log_path:
+                log_rotation_quality({'sample_id': sample_id, 'hand_role': hand_role, 'side_idx': side_idx,
+                                      'status': 'no_valid_frames', 'total_frames': len(df),
+                                      'n_invalid_geom': int(invalid_mask.sum()), 'n_velocity_flagged': '',
+                                      'velocity_triggered': '', 'max_gap_frames': ''}, log_path)
             return np.zeros(len(mats)), np.zeros(len(mats)), np.zeros(len(mats))
 
         # get the first frame with a valid tracking to define the base reference
@@ -927,8 +939,21 @@ class ToolBox:
         limit_mask = (velocity > 38).any(axis=1)
         euler_df.loc[limit_mask] = np.nan
 
+        # diagnostics to capture interpolation fills
+        if sample_id and log_path:
+            combined_nan_mask = euler_df.isna().any(axis=1).to_numpy()
+            log_rotation_quality({'sample_id': sample_id,
+                                  'hand_role': hand_role,
+                                  'side_idx': side_idx,
+                                  'status': 'ok',
+                                  'total_frames': len(df),
+                                  'n_invalid_geom': int(invalid_mask.sum()),
+                                  'n_velocity_flagged': int(limit_mask.sum()),
+                                  'velocity_triggered': bool(limit_mask.any()),
+                                  'max_gap_frames': _longest_true_run(combined_nan_mask)}, log_path)
+
         # interpolate (monotonic cubic)
-        euler_df = euler_df.interpolate(method='pchip', limit_direction='both')
+        euler_df = euler_df.interpolate(method='pchip', limit_direction='both', limit=12)
 
         # extract the angle for pronation-supination and return in standard XYZ order
         euler_angles: tuple = (euler_df['x'].to_numpy(), euler_df['y'].to_numpy(), euler_df['z'].to_numpy())
@@ -1260,3 +1285,46 @@ def save_extracted_data_to_csv(feature_list_of_dicts: list[dict], out_file_path:
     # save table
     combined_df.to_csv(out_file_path, index=False)
     print(f'Successfully saved {len(combined_df)} trial records of extracted movement parameters: {out_file_path}')
+
+
+def _longest_true_run(mask: np.ndarray) -> int:
+    """
+    Length of the most consecutive True values in a boolean array.
+
+    Args:
+        mask (np.ndarray): boolean array.
+
+    Returns:
+         int: Length of the most consecutive True values.
+    """
+
+    if mask.size == 0 or not mask.any():
+        return 0
+
+    padded = np.concatenate(([False], mask, [False])).astype(int)
+    diff = np.diff(padded)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+
+    return int(np.max(ends - starts))
+
+
+def log_rotation_quality(row: dict, log_path: str) -> None:
+    """
+    Appends one quality-check row for calculate_3d_hand_rotation().
+    Header is written on first call.
+
+    Args:
+        row (dict): Dictionary holding row data.
+        log_path (str): Path to the log file.
+
+    Returns:
+        None
+    """
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    file_exists = os.path.exists(log_path)
+    with open(log_path, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)

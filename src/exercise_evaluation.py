@@ -1,12 +1,13 @@
 # src/exercise_evaluation.py
 
 # libraries
+import os
 import numpy as np
 import pandas as pd
 from scipy.spatial import ConvexHull, QhullError
 
 # modules
-from src.config import config
+from src.config import config, project_path
 from src.core import Exercise
 from src.utils import ToolBox
 from src.kinematic_features import KinematicFeatures
@@ -20,6 +21,7 @@ class ExerciseEvaluator:
         self.tb = ToolBox(fps=self.fps)
         self.kf = KinematicFeatures(fps=self.fps)
         self.viz = Visualizer()
+        self.rotation_log_path = os.path.join(project_path, 'data', '04_features', 'rotation_quality_log.csv')
         # default config for adaptive peak detection
         self.peak_cfg: dict = {'min_segment_length': 0.05,
                                'min_peak_amp_diff': 0.15,
@@ -817,6 +819,7 @@ class ExerciseEvaluator:
 
         # get current active side
         active_side_idx = 1 if exercise.side_focus == 'L' else 2
+        sample_id = f'{p_id}_{exercise.visit_id}_{exercise.exercise_id}_{exercise.side_condition}'
 
         # load the cleaned DataFrame directly
         try:
@@ -826,7 +829,10 @@ class ExerciseEvaluator:
             return {}
 
         # assuming that the y-axis is the longitudinal axis of the forearm
-        euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(df, active_side_idx)
+        euler_x, euler_y, euler_z = self.tb.calculate_3d_hand_rotation(df, active_side_idx,
+                                                                       sample_id=sample_id,
+                                                                       hand_role='active',
+                                                                       log_path=self.rotation_log_path)
 
         # select exercise-specific config (if not defined, fall back to default self.peak_cfg)
         ex_peak_cfg: dict = config['pro_sup'].get('peak_cfg', self.peak_cfg)
@@ -872,7 +878,10 @@ class ExerciseEvaluator:
 
         if f'{p_wrist}_x' in df.columns and f'{p_mcp2}_x' in df.columns:
             # calculate the equivalent rotational angles for the passive hand
-            _, p_euler_y, _ = self.tb.calculate_3d_hand_rotation(df, passive_side_idx)
+            _, p_euler_y, _ = self.tb.calculate_3d_hand_rotation(df, passive_side_idx,
+                                                                 sample_id=sample_id,
+                                                                 hand_role='passive',
+                                                                 log_path=self.rotation_log_path)
             passive_signal = p_euler_y
 
         else:

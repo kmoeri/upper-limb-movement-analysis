@@ -19,6 +19,10 @@ def run_kinematics_extractor(save_plots: bool = True):
     ex_eval: ExerciseEvaluator = ExerciseEvaluator(config['camera_param']['fps'])
     viz: Visualizer = Visualizer()
 
+    # renew the rotation-quality log for each new run
+    if os.path.exists(ex_eval.rotation_log_path):
+        os.remove(ex_eval.rotation_log_path)
+
     # load participant objects
     participant_objs_path: str = os.path.join(project_path, 'data', '03_processed')
     participant_pickle_lst: list = [x for x in sorted(os.listdir(participant_objs_path))
